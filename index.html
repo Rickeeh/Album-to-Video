@@ -1,0 +1,870 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Album to Video</title>
+<style>
+  :root{
+    --bg:#0c0f14;
+    --panel:#121827;
+    --panel2:#0f1523;
+    --text:#eaf1ff;
+    --muted:#9aa8c4;
+    --accent:#5aa7ff;
+    --accentSoft:#8fc6ff;
+    --border:#24314a;
+    --danger:#ff6b6b;
+    --total:#7fb8ff;
+  }
+  *{ box-sizing:border-box; }
+  body{
+    margin:0; padding:21px;
+    font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+  }
+  .topbar{ display:flex; align-items:flex-start; justify-content:space-between; gap:13px; margin-bottom:21px; }
+  .title{ font-size:20px; font-weight:900; letter-spacing:0.2px; }
+  .subtitle{ font-size:13px; color:var(--muted); margin-top:6px; max-width:860px; line-height:1.35; }
+  .topActions{ display:flex; gap:13px; align-items:center; flex-wrap:wrap; }
+  .grid{ display:grid; grid-template-columns: 1.6fr 1fr; gap:21px; }
+  .card{
+    background: linear-gradient(180deg, var(--panel), var(--panel2));
+    border:1px solid var(--border);
+    border-radius:14px;
+    padding:21px;
+    box-shadow: 0 14px 40px rgba(0,0,0,0.28);
+  }
+  .card h3{
+    margin:0 0 13px 0;
+    font-size:13px;
+    color: var(--muted);
+    font-weight:800;
+    text-transform:uppercase;
+    letter-spacing:0.9px;
+  }
+  .row{ display:flex; gap:13px; flex-wrap:wrap; margin-top:13px; align-items:center; }
+  button{
+    background: var(--accent);
+    color:#04111e;
+    border:0;
+    border-radius:10px;
+    padding:10px 12px;
+    font-weight:900;
+    cursor:pointer;
+    font-size:13px;
+  }
+  button.secondary{ background: transparent; color: var(--text); border:1px solid var(--border); }
+  button.danger{ background: transparent; color: var(--danger); border:1px solid rgba(255,107,107,0.35); }
+  button.primary{
+    background: linear-gradient(180deg, var(--accentSoft), var(--accent));
+    color:#02101e;
+    padding:12px 16px;
+    border-radius:12px;
+    font-size:14px;
+    letter-spacing:0.2px;
+    box-shadow: 0 10px 22px rgba(90,167,255,0.18);
+  }
+  button:disabled{ opacity:0.5; cursor:not-allowed; }
+
+  select, input[type="text"]{
+    background: transparent;
+    color: var(--text);
+    border:1px solid var(--border);
+    border-radius:10px;
+    padding:10px 12px;
+    font-weight:900;
+    font-size:13px;
+    outline:none;
+  }
+  select{ min-width: 320px; }
+  option{ color:#000; }
+
+  .kv{
+    margin-top:13px;
+    display:grid;
+    grid-template-columns: 110px 1fr;
+    gap:8px 13px;
+    font-size:13px;
+    color: var(--muted);
+    align-items:center;
+  }
+  .kv .v{ color: var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+  .list{
+    margin:13px 0 0 0;
+    padding:0;
+    list-style:none;
+    max-height: 420px;
+    overflow:auto;
+    border:1px solid var(--border);
+    border-radius:12px;
+  }
+  .list li{
+    display:grid;
+    grid-template-columns: 1fr 28px;
+    align-items:center;
+    gap:13px;
+    padding:10px 13px;
+    border-bottom:1px solid rgba(255,255,255,0.06);
+    font-size:13px;
+  }
+  .list li:last-child{ border-bottom:0; }
+
+  .trackText{ min-width:0; }
+  .trackMain{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:900; }
+  .trackSub{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color: var(--muted); font-size:12px; margin-top:2px; }
+
+  .removeBtn{
+    width:28px; height:28px;
+    border-radius:8px;
+    border:1px solid rgba(255,255,255,0.10);
+    background: rgba(255,255,255,0.03);
+    color: rgba(255,255,255,0.82);
+    display:flex; align-items:center; justify-content:center;
+    cursor:pointer;
+    user-select:none;
+  }
+  .removeBtn:hover{
+    border-color: rgba(255,107,107,0.4);
+    color: var(--danger);
+    background: rgba(255,107,107,0.08);
+  }
+  .removeBtn.disabled{
+    opacity:0.4;
+    cursor:not-allowed;
+    pointer-events:none;
+  }
+
+  .inline{ display:flex; align-items:center; gap:13px; flex-wrap:wrap; margin-top:13px; }
+  .inline label{ display:flex; align-items:center; gap:8px; color: var(--muted); font-size:13px; font-weight:850; }
+  .inline input[type="checkbox"]{ transform: scale(1.05); }
+
+  .coverPreviewRow{
+    display:flex;
+    align-items:center;
+    gap:13px;
+    margin-top:13px;
+    padding:13px;
+    border:1px solid rgba(255,255,255,0.08);
+    border-radius:12px;
+    background: rgba(255,255,255,0.02);
+  }
+  .coverPreview{
+    width:88px; height:88px;
+    border-radius:14px;
+    border:1px solid rgba(255,255,255,0.10);
+    background: rgba(255,255,255,0.03);
+    overflow:hidden;
+    display:flex; align-items:center; justify-content:center;
+    flex: 0 0 auto;
+    position:relative;
+  }
+  .coverPreview img{ width:100%; height:100%; object-fit: cover; display:none; }
+  .coverPlaceholder{
+    color: var(--muted);
+    font-weight:800;
+    font-size:11px;
+    letter-spacing:0.2px;
+    text-align:center;
+    padding:0;
+    line-height:1.2;
+    cursor:pointer;
+    position:absolute;
+    top:50%;
+    left:50%;
+    transform: translate(-50%, -50%);
+    width:100%;
+  }
+  .coverMeta{ min-width:0; flex: 1 1 auto; }
+  .coverMetaTitle{ font-weight:950; font-size:13px; margin-bottom:4px; }
+  .coverMetaSub{ color: var(--muted); font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+  .progressWrap{
+    display:none;
+    margin-top:21px;
+    border-top:1px solid rgba(255,255,255,0.08);
+    padding-top:13px;
+  }
+  .progressTitle{ font-size:13px; color: var(--muted); margin-bottom:8px; }
+  .bar{ height:10px; background: rgba(255,255,255,0.09); border-radius:999px; overflow:hidden; }
+  .fill{ height:100%; width:0%; background: var(--accent); border-radius:999px; transition: width 0.12s linear; }
+  .fill.total{ background: var(--total); opacity:0.9; }
+
+  @keyframes indeterminateSlide {
+    from { transform: translateX(-60%); }
+    to   { transform: translateX(220%); }
+  }
+  .indeterminate{
+    width:35% !important;
+    opacity:0.75;
+    animation: indeterminateSlide 0.85s infinite linear;
+  }
+
+  .statusLine{ margin-top:10px; font-size:13px; color: var(--muted); line-height:1.35; }
+  .openRow{ margin-top:10px; display:none; }
+  .appShell{ position:relative; }
+  .lockBadge{
+    position:absolute;
+    top:50%;
+    left:50%;
+    transform: translate(-50%, -50%);
+    z-index:20;
+    background: rgba(90,167,255,0.14);
+    border:1px solid rgba(143,198,255,0.45);
+    color: var(--accentSoft);
+    font-size:12px;
+    font-weight:700;
+    letter-spacing:0.8px;
+    padding:7px 12px;
+    border-radius:999px;
+    opacity:0;
+    transition: opacity 0.18s ease;
+    pointer-events:none;
+    text-transform: lowercase;
+    text-shadow: 0 0 12px rgba(143,198,255,0.35);
+  }
+  .locked .lockBadge{
+    opacity:1;
+  }
+  .locked .card{
+    opacity:0.78;
+    filter: saturate(0.92);
+  }
+  .toastWrap{
+    position:fixed;
+    right:18px;
+    bottom:18px;
+    display:flex;
+    flex-direction:column;
+    gap:8px;
+    z-index:30;
+    pointer-events:none;
+  }
+  .toast{
+    background: rgba(15,21,35,0.94);
+    border:1px solid var(--border);
+    color: var(--text);
+    padding:10px 12px;
+    border-radius:10px;
+    font-size:12px;
+    font-weight:700;
+    letter-spacing:0.2px;
+    box-shadow: 0 8px 20px rgba(0,0,0,0.35);
+    opacity:0;
+    transform: translateY(6px);
+    transition: opacity 0.18s ease, transform 0.18s ease;
+  }
+  .toast.show{ opacity:1; transform: translateY(0); }
+  .toast.warn{ border-color: rgba(255,107,107,0.35); color: var(--danger); }
+  .toast.info{ border-color: rgba(90,167,255,0.35); color: var(--accentSoft); }
+</style>
+</head>
+<body>
+
+<div class="appShell">
+<div class="lockBadge">export</div>
+<div class="topbar">
+  <div>
+    <div class="title">Album to Video</div>
+    <div class="subtitle">Static cover videos for audio releases.</div>
+  </div>
+  <div class="topActions">
+    <button class="secondary" id="btnNewAlbum">New</button>
+  </div>
+</div>
+
+<div class="grid">
+  <div class="card">
+    <h3>Tracks</h3>
+
+    <div class="row" style="margin-top:0;">
+      <button id="btnAddTracks">Add Audio Files</button>
+      <button class="danger" id="btnClearTracks">Clear</button>
+    </div>
+
+    <ul class="list" id="audioList"></ul>
+  </div>
+
+  <div class="card">
+    <h3>Settings</h3>
+
+    <div class="row">
+      <label style="display:flex; flex-direction:column; gap:6px;">
+        <span style="color:var(--muted); font-weight:850; font-size:12px;">Preset</span>
+        <select id="presetSelect">
+          <option value="album_ep">Album / EP — Recommended</option>
+          <option value="single_track">Single / Track</option>
+          <option value="long_form">Long-form Audio</option>
+        </select>
+      </label>
+    </div>
+
+    <div class="inline">
+      <label><input type="checkbox" id="createAlbumFolder" checked /> Create release folder</label>
+      <input type="text" id="albumName" placeholder="Release name" />
+    </div>
+
+    <div class="inline">
+      <label><input type="checkbox" id="prefixTrackNo" /> Prefix track number</label>
+    </div>
+
+    <div class="inline">
+      <label><input type="checkbox" id="debugMode" /> Debug log</label>
+    </div>
+
+    <div class="row">
+      <button class="secondary" id="btnCover">Choose cover art</button>
+      <button class="secondary" id="btnExport">Choose export folder</button>
+    </div>
+
+    <div class="coverPreviewRow">
+      <div class="coverPreview">
+        <img id="coverImg" alt="Cover art" />
+        <div class="coverPlaceholder" id="coverPlaceholder">No cover art</div>
+      </div>
+      <div class="coverMeta">
+        <div class="coverMetaTitle">Cover art</div>
+        <div class="coverMetaSub" id="coverPreviewText">No cover art</div>
+      </div>
+    </div>
+
+    <div class="kv">
+      <div>Cover art:</div><div class="v" id="coverLabel">Not selected</div>
+      <div>Export:</div><div class="v" id="exportLabel">Not selected</div>
+      <div>Tracks:</div><div class="v" id="countLabel">0</div>
+    </div>
+
+    <div class="row" style="margin-top:14px;">
+      <button id="renderBtn" class="primary">Export</button>
+      <button id="cancelBtn" class="danger" disabled>Cancel</button>
+    </div>
+
+    <div class="progressWrap" id="progressWrap">
+      <div class="progressTitle" id="trackTitle">Current track: —</div>
+      <div class="bar"><div class="fill" id="trackFill"></div></div>
+
+      <div class="progressTitle" style="margin-top:12px;">Total progress</div>
+      <div class="bar"><div class="fill total" id="totalFill"></div></div>
+
+      <div class="statusLine" id="statusLine"></div>
+
+      <div class="openRow" id="openRow">
+        <button class="secondary" id="btnOpenFolder">Open output folder</button>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+<div class="toastWrap" id="toastWrap"></div>
+
+<script>
+  const audioList = document.getElementById('audioList');
+  const coverLabel = document.getElementById('coverLabel');
+  const exportLabel = document.getElementById('exportLabel');
+  const countLabel = document.getElementById('countLabel');
+
+  const presetSelect = document.getElementById('presetSelect');
+  const createAlbumFolderEl = document.getElementById('createAlbumFolder');
+  const albumNameEl = document.getElementById('albumName');
+  const prefixTrackNoEl = document.getElementById('prefixTrackNo');
+  const debugModeEl = document.getElementById('debugMode');
+
+  const progressWrap = document.getElementById('progressWrap');
+  const trackTitle = document.getElementById('trackTitle');
+  const statusLine = document.getElementById('statusLine');
+  const trackFill = document.getElementById('trackFill');
+  const totalFill = document.getElementById('totalFill');
+
+  const renderBtn = document.getElementById('renderBtn');
+  const cancelBtn = document.getElementById('cancelBtn');
+
+  const coverImg = document.getElementById('coverImg');
+  const coverPlaceholder = document.getElementById('coverPlaceholder');
+  const coverPreviewText = document.getElementById('coverPreviewText');
+
+  const openRow = document.getElementById('openRow');
+  const toastWrap = document.getElementById('toastWrap');
+
+  const btnAddTracks = document.getElementById('btnAddTracks');
+  const btnClearTracks = document.getElementById('btnClearTracks');
+  const btnCover = document.getElementById('btnCover');
+  const btnExport = document.getElementById('btnExport');
+  const btnNewAlbum = document.getElementById('btnNewAlbum');
+  const btnOpenFolder = document.getElementById('btnOpenFolder');
+  const coverPreview = document.querySelector('.coverPreview');
+
+  let tracks = []; // { path, displayName, outputBase, originalBase, trackNo, hasTrackNo }
+  let trackPathSet = new Set();
+
+  let imageFile = null;
+  let exportFolder = null;
+
+  let isRendering = false;
+  let isValidating = false;
+  let renderQueue = [];
+
+  let lastFinalExportFolder = null;
+
+  const uiDisableList = [
+    btnAddTracks,
+    btnClearTracks,
+    btnCover,
+    btnExport,
+    btnNewAlbum,
+    presetSelect,
+    createAlbumFolderEl,
+    albumNameEl,
+    prefixTrackNoEl,
+    debugModeEl,
+  ];
+
+  function setUiLocked(locked) {
+    uiDisableList.forEach((el) => {
+      if (!el) return;
+      el.disabled = !!locked;
+    });
+    renderBtn.disabled = !!locked;
+    document.body.classList.toggle('locked', !!locked);
+  }
+
+  function sanitizeFolderName(name) {
+    const cleaned = (name || '')
+      .replace(/[\/\\:\*\?"<>\|]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    return cleaned || 'Album';
+  }
+
+  function sanitizeFileBaseName(name) {
+    const cleaned = (name || '')
+      .replace(/[\/\\:\*\?"<>\|]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    return cleaned || 'Untitled';
+  }
+
+  function stripLeadingTrackNumber(s) {
+    return (s || '').replace(/^\s*\d+\s*[\.\-\_\)]\s*/g, '').trim();
+  }
+
+  function pad2(n) {
+    const x = parseInt(n, 10);
+    if (!Number.isFinite(x) || x < 0) return null;
+    return String(x).padStart(2, '0');
+  }
+
+  function updateCounts() { countLabel.textContent = String(tracks.length); }
+
+  function showToast(message, type = 'info', ttlMs = 2400) {
+    const el = document.createElement('div');
+    el.className = `toast ${type}`;
+    el.textContent = message;
+    toastWrap.appendChild(el);
+
+    requestAnimationFrame(() => el.classList.add('show'));
+    setTimeout(() => {
+      dismissToast(el);
+    }, Math.max(800, ttlMs));
+    return el;
+  }
+
+  function dismissToast(el) {
+    if (!el || !el.isConnected) return;
+    el.classList.remove('show');
+    setTimeout(() => el.remove(), 200);
+  }
+
+  async function probeFilesWithLimit(files, limit = 4) {
+    const results = new Map();
+    let idx = 0;
+    let active = 0;
+
+    return new Promise((resolve) => {
+      const next = () => {
+        if (idx >= files.length && active === 0) {
+          resolve(results);
+          return;
+        }
+
+        while (active < limit && idx < files.length) {
+          const f = files[idx++];
+          active += 1;
+          window.api.probeAudio(f)
+            .then((info) => results.set(f, info))
+            .catch(() => results.set(f, { ok: false, durationSec: 0 }))
+            .finally(() => {
+              active -= 1;
+              next();
+            });
+        }
+      };
+
+      next();
+    });
+  }
+
+  function showProgressUI() { progressWrap.style.display = 'block'; }
+  function hideProgressUI() {
+    progressWrap.style.display = 'none';
+    trackFill.style.width = '0%';
+    totalFill.style.width = '0%';
+    trackFill.classList.remove('indeterminate');
+    trackTitle.textContent = 'Current track: —';
+    statusLine.textContent = '';
+    openRow.style.display = 'none';
+  }
+
+  function shouldAutoSortByTrackNo() {
+    if (!tracks.length) return false;
+    return tracks.every(t => t.hasTrackNo === true);
+  }
+
+  function sortTracksIfSafe() {
+    if (!shouldAutoSortByTrackNo()) return;
+    tracks.sort((a, b) => (a.trackNo - b.trackNo));
+  }
+
+  function buildOutputBaseForTrack(track, { prefix }) {
+    const base = sanitizeFileBaseName(track.outputBase || track.originalBase);
+    if (!prefix) return base;
+    if (!track.hasTrackNo) return base;
+    const p = pad2(track.trackNo);
+    if (!p) return base;
+    return sanitizeFileBaseName(`${p}. ${base}`);
+  }
+
+  let renderQueued = false;
+  function scheduleRenderTrackList() {
+    if (renderQueued) return;
+    renderQueued = true;
+    requestAnimationFrame(() => {
+      renderQueued = false;
+      renderTrackList();
+    });
+  }
+
+  function renderTrackList() {
+    audioList.innerHTML = '';
+
+    tracks.forEach((t) => {
+      const li = document.createElement('li');
+      li.dataset.path = t.path;
+
+      const text = document.createElement('div');
+      text.className = 'trackText';
+
+      const main = document.createElement('div');
+      main.className = 'trackMain';
+      const prefixDot = t.hasTrackNo ? `${pad2(t.trackNo)}. ` : '';
+      main.textContent = `${prefixDot}${t.displayName || t.originalBase}`;
+
+      const sub = document.createElement('div');
+      sub.className = 'trackSub';
+      const outPreviewBase = buildOutputBaseForTrack(t, { prefix: prefixTrackNoEl.checked });
+      sub.textContent = `${t.originalBase}  →  ${outPreviewBase}.mp4`;
+
+      text.appendChild(main);
+      text.appendChild(sub);
+
+      const x = document.createElement('div');
+      x.className = 'removeBtn';
+      x.title = 'Remove';
+      x.textContent = '✕';
+      if (isRendering) x.classList.add('disabled');
+
+      x.addEventListener('click', () => {
+        tracks = tracks.filter(z => z.path !== t.path);
+        trackPathSet.delete(t.path);
+        sortTracksIfSafe();
+        scheduleRenderTrackList();
+      });
+
+      li.appendChild(text);
+      li.appendChild(x);
+
+      audioList.appendChild(li);
+    });
+
+    updateCounts();
+  }
+
+  function clearTracksOnly() {
+    tracks = [];
+    trackPathSet = new Set();
+    renderTrackList();
+  }
+
+  function clearCover() {
+    imageFile = null;
+    coverLabel.textContent = 'Not selected';
+    coverImg.src = '';
+    coverImg.style.display = 'none';
+    coverPlaceholder.style.display = 'block';
+    coverPreviewText.textContent = 'No cover art';
+  }
+
+  function clearExportFolder() {
+    exportFolder = null;
+    exportLabel.textContent = 'Not selected';
+    lastFinalExportFolder = null;
+  }
+
+  function newAlbumReset() {
+    if (isRendering) return;
+    clearTracksOnly();
+    clearCover();
+    clearExportFolder();
+    albumNameEl.value = '';
+    prefixTrackNoEl.checked = false;
+    debugModeEl.checked = false;
+    presetSelect.value = 'album_ep';
+    hideProgressUI();
+  }
+
+  prefixTrackNoEl.addEventListener('change', () => scheduleRenderTrackList());
+
+  async function pickAudios() {
+    if (isValidating) return;
+    const files = await window.api.selectAudios();
+    if (!files || !files.length) return;
+
+    const newFiles = files.filter((f) => !trackPathSet.has(f));
+    if (!newFiles.length) return;
+
+    isValidating = true;
+    btnAddTracks.disabled = true;
+    btnNewAlbum.disabled = true;
+    const validatingToast = showToast('Validating audio', 'info', 999999);
+
+    try {
+      newFiles.forEach((f) => trackPathSet.add(f));
+
+      const probeResults = await probeFilesWithLimit(newFiles, 4);
+
+      for (const f of newFiles) {
+        const probe = probeResults.get(f);
+        if (!probe?.ok) {
+          const name = window.api.pathBasename(f);
+          showToast(`Skipped unsupported file: ${name}`, 'warn', 3000);
+          trackPathSet.delete(f);
+          continue;
+        }
+
+        const originalBaseRaw = window.api.pathBasenameNoExt(f);
+        const originalBase = stripLeadingTrackNumber(originalBaseRaw);
+
+        tracks.push({
+          path: f,
+          displayName: originalBase + ' (reading tags)',
+          outputBase: originalBase,
+          originalBase,
+          trackNo: null,
+          hasTrackNo: false,
+        });
+      }
+
+      scheduleRenderTrackList();
+
+      for (const t of tracks) {
+        if (!t.displayName.includes('(reading tags)')) continue;
+
+        try {
+          const info = await window.api.readMetadata(t.path);
+          const artist = (info.artist || '').trim();
+          const title = (info.title || '').trim();
+          const album = (info.album || '').trim();
+
+          const tn = info.trackNo;
+          const trackNo = Number.isFinite(Number(tn)) ? Number(tn) : null;
+          const hasTrackNo = Number.isFinite(trackNo) && trackNo > 0;
+
+          let outputBase = '';
+          if (artist && title) outputBase = `${artist} - ${title}`;
+          else if (title) outputBase = title;
+          else outputBase = t.originalBase;
+
+          t.outputBase = sanitizeFileBaseName(stripLeadingTrackNumber(outputBase));
+          t.displayName = t.outputBase;
+          t.trackNo = hasTrackNo ? trackNo : null;
+          t.hasTrackNo = hasTrackNo;
+
+          if (!albumNameEl.value.trim() && album) albumNameEl.value = album;
+        } catch {
+          t.displayName = sanitizeFileBaseName(t.originalBase);
+          t.outputBase = sanitizeFileBaseName(t.originalBase);
+        }
+
+        sortTracksIfSafe();
+        scheduleRenderTrackList();
+      }
+    } finally {
+      dismissToast(validatingToast);
+      isValidating = false;
+      btnAddTracks.disabled = false;
+      btnNewAlbum.disabled = false;
+    }
+  }
+
+  async function pickImage() {
+    const file = await window.api.selectImage();
+    if (!file) return;
+
+    imageFile = file;
+    const coverName = window.api.pathBasename(file);
+    coverLabel.textContent = coverName;
+    coverPreviewText.textContent = coverName;
+
+    coverImg.src = window.api.fileUrl(file);
+    coverImg.style.display = 'block';
+    coverPlaceholder.style.display = 'none';
+  }
+
+  async function chooseFolder() {
+    const folder = await window.api.selectFolder();
+    if (!folder) return;
+    exportFolder = folder;
+    exportLabel.textContent = folder;
+  }
+
+  async function openOutputFolder() {
+    if (!lastFinalExportFolder) return;
+    await window.api.openFolder(lastFinalExportFolder);
+  }
+
+  async function cancelRender() {
+    if (!isRendering) return;
+    statusLine.textContent = 'Cancelling';
+    await window.api.cancelRender();
+  }
+
+  window.api.onRenderProgress(({
+    trackIndex,
+    trackCount,
+    percentTrack,
+    percentTotal,
+    indeterminate,
+    isFinal,
+  }) => {
+    if (!isRendering) return;
+
+    if (indeterminate) {
+      trackFill.classList.add('indeterminate');
+    } else {
+      trackFill.classList.remove('indeterminate');
+      const pct = Number(percentTrack);
+      const clamped = (!isFinal && pct >= 100) ? 99.5 : pct;
+      trackFill.style.width = `${Number(clamped).toFixed(1)}%`;
+    }
+    totalFill.style.width = `${Number(percentTotal).toFixed(1)}%`;
+
+    const name = renderQueue?.[trackIndex]?.displayName || renderQueue?.[trackIndex]?.originalBase || '—';
+    trackTitle.textContent = `Current track (${trackIndex + 1}/${trackCount}): ${name}`;
+
+    const trackPctLabel = indeterminate ? '--' : `${Number(percentTrack).toFixed(1)}%`;
+    const totalPctLabel = `${Number(percentTotal).toFixed(1)}%`;
+    if (trackCount <= 1) {
+      statusLine.textContent = `Exporting ${trackPctLabel}`;
+    } else {
+      statusLine.textContent = `Exporting ${trackIndex + 1}/${trackCount} · Track ${trackPctLabel} · Total ${totalPctLabel}`;
+    }
+
+    if (isFinal) {
+      trackFill.classList.remove('indeterminate');
+      trackFill.style.width = '100%';
+      const pctTotalFinal = ((trackIndex + 1) / Math.max(1, trackCount)) * 100;
+      totalFill.style.width = `${Number(pctTotalFinal).toFixed(1)}%`;
+    }
+  });
+
+  async function renderAll() {
+    if (isRendering) return;
+
+    if (!tracks.length) { showToast('Add audio files.', 'warn'); return; }
+    if (!imageFile) { showToast('Choose cover art.', 'warn'); return; }
+    if (!exportFolder) { showToast('Choose export folder.', 'warn'); return; }
+
+    const presetKey = presetSelect.value;
+    const toRender = [...tracks];
+    renderQueue = toRender;
+
+    let finalExportFolder = exportFolder;
+    if (createAlbumFolderEl.checked) {
+      const safeAlbum = sanitizeFolderName(albumNameEl.value);
+      finalExportFolder = window.api.pathJoin(exportFolder, safeAlbum);
+      await window.api.ensureDir(finalExportFolder);
+    }
+    lastFinalExportFolder = finalExportFolder;
+
+    showProgressUI();
+    trackFill.style.width = '0%';
+    totalFill.style.width = '0%';
+    trackFill.classList.remove('indeterminate');
+    openRow.style.display = 'none';
+
+    isRendering = true;
+    setUiLocked(true);
+    renderBtn.textContent = 'Exporting';
+    cancelBtn.disabled = false;
+
+    statusLine.textContent = 'Starting export';
+
+    const payload = {
+      tracks: toRender.map(t => ({
+        audioPath: t.path,
+        outputBase: buildOutputBaseForTrack(t, { prefix: prefixTrackNoEl.checked }),
+      })),
+      imagePath: imageFile,
+      exportFolder: finalExportFolder,
+      presetKey,
+      timeoutPerTrackMs: 30 * 60 * 1000,
+      debug: !!debugModeEl.checked,
+      createAlbumFolder: !!createAlbumFolderEl.checked,
+    };
+
+    try {
+      const res = await window.api.renderAlbum(payload);
+      if (res?.debugLogPath) {
+        statusLine.textContent = `Done. Debug log: ${res.debugLogPath}`;
+      } else {
+        statusLine.textContent = 'Done.';
+      }
+      openRow.style.display = 'block';
+    } catch (err) {
+      if (String(err?.message || err).includes('CANCELLED')) {
+        statusLine.textContent = 'Cancelled.';
+        showToast('Export cancelled.', 'warn');
+      } else {
+        console.error(err);
+        const msg = String(err?.message || err || 'Unknown error');
+        statusLine.textContent = `Export stopped: ${msg}`;
+        showToast(`Export stopped: ${msg}`, 'warn', 5000);
+      }
+    } finally {
+      isRendering = false;
+      setUiLocked(false);
+      renderBtn.textContent = 'Export';
+      cancelBtn.disabled = true;
+      trackFill.classList.remove('indeterminate');
+    }
+  }
+
+  btnAddTracks.addEventListener('click', pickAudios);
+  btnClearTracks.addEventListener('click', clearTracksOnly);
+  btnCover.addEventListener('click', pickImage);
+  coverPreview.addEventListener('click', () => {
+    if (!imageFile) pickImage();
+  });
+  btnExport.addEventListener('click', chooseFolder);
+  btnNewAlbum.addEventListener('click', newAlbumReset);
+  btnOpenFolder.addEventListener('click', openOutputFolder);
+  renderBtn.addEventListener('click', renderAll);
+  cancelBtn.addEventListener('click', cancelRender);
+
+  renderTrackList();
+  clearCover();
+  hideProgressUI();
+</script>
+
+</body>
+</html>
