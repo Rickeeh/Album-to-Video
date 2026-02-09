@@ -9,18 +9,17 @@ const { cleanupJob } = require('./src/main/cleanup');
 const { createSessionLogger } = require('./src/main/logger');
 
 // ✅ Bundled FFmpeg/FFprobe (no PATH dependency)
-// If packages are missing, we fall back to PATH so dev doesn't hard-break.
-let FFMPEG_BIN = 'ffmpeg';
-let FFPROBE_BIN = 'ffprobe';
-let FFMPEG_SOURCE = 'PATH';
-let FFPROBE_SOURCE = 'PATH';
+let FFMPEG_BIN = null;
+let FFPROBE_BIN = null;
+let FFMPEG_SOURCE = null;
+let FFPROBE_SOURCE = null;
 try {
   // ffmpeg-static exports an absolute path to the platform binary
   // eslint-disable-next-line global-require
   const ffmpegStatic = require('ffmpeg-static');
   if (typeof ffmpegStatic === 'string' && ffmpegStatic.length) {
     FFMPEG_BIN = ffmpegStatic;
-    FFMPEG_SOURCE = 'static';
+    FFMPEG_SOURCE = 'bundled';
   }
 } catch {}
 
@@ -29,7 +28,7 @@ try {
   const ffprobeInstaller = require('@ffprobe-installer/ffprobe');
   if (ffprobeInstaller?.path) {
     FFPROBE_BIN = ffprobeInstaller.path;
-    FFPROBE_SOURCE = 'static';
+    FFPROBE_SOURCE = 'bundled';
   }
 } catch {}
 
@@ -106,6 +105,19 @@ const REASON_CODES = Object.freeze({
   PROBE_FAILED: 'PROBE_FAILED',
   UNCAUGHT: 'UNCAUGHT',
 });
+
+function ensureBundledBinaries() {
+  if (!FFMPEG_BIN || !path.isAbsolute(FFMPEG_BIN)) {
+    const e = new Error('Bundled ffmpeg is required but not available.');
+    e.code = REASON_CODES.UNCAUGHT;
+    throw e;
+  }
+  if (!FFPROBE_BIN || !path.isAbsolute(FFPROBE_BIN)) {
+    const e = new Error('Bundled ffprobe is required but not available.');
+    e.code = REASON_CODES.UNCAUGHT;
+    throw e;
+  }
+}
 
 function ensureDir(dirPath) {
   try {
@@ -302,6 +314,20 @@ function tailLines(text, lineCount) {
   if (!text) return '';
   const lines = String(text).split(/\r?\n/).filter(Boolean);
   return lines.slice(-Math.max(1, lineCount || 1)).join('\n');
+}
+
+function resolveSystemVersion() {
+  if (typeof app.getSystemVersion === 'function') {
+    try {
+      const v = app.getSystemVersion();
+      if (v) return String(v);
+    } catch {}
+  }
+  return os.release();
+}
+
+function buildOsDescriptor() {
+  return `${process.platform} ${resolveSystemVersion()}`.trim();
 }
 
 function buildTmpPath(finalPath) {
@@ -789,6 +815,7 @@ ipcMain.handle('render-album', async (event, payload) => {
   if (!Array.isArray(tracks) || tracks.length === 0) throw new Error('No tracks to export');
   if (!imagePath) throw new Error('Missing cover art');
   if (!exportFolder) throw new Error('Missing export folder');
+  ensureBundledBinaries();
 
   assertFileReadable(imagePath, 'Cover art');
   tracks.forEach((t, idx) => {
@@ -827,7 +854,7 @@ ipcMain.handle('render-album', async (event, payload) => {
   const report = {
     appVersion: app.getVersion(),
     electronVersion: process.versions.electron,
-    os: `${os.platform()} ${os.release()}`,
+    os: buildOsDescriptor(),
     arch: process.arch,
     ffmpegPath: FFMPEG_BIN,
     ffprobePath: FFPROBE_BIN,
