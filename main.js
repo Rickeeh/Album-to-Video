@@ -4,6 +4,7 @@ const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
 const mm = require('music-metadata');
+const { cleanupJob } = require('./src/main/cleanup');
 
 // ✅ Bundled FFmpeg/FFprobe (no PATH dependency)
 // If packages are missing, we fall back to PATH so dev doesn't hard-break.
@@ -79,10 +80,21 @@ const PRESETS = {
 };
 
 const currentJob = {
+  id: null,
   ffmpeg: null,
   cancelled: false,
+  cancelReason: null,
   active: false,
+  cleanupContext: null,
 };
+
+const REASON_CODES = Object.freeze({
+  CANCELLED: 'CANCELLED',
+  TIMEOUT: 'TIMEOUT',
+  FFMPEG_EXIT_NONZERO: 'FFMPEG_EXIT_NONZERO',
+  PROBE_FAILED: 'PROBE_FAILED',
+  UNCAUGHT: 'UNCAUGHT',
+});
 
 function ensureDir(dirPath) {
   try {
@@ -275,6 +287,32 @@ function safeRmdirIfEmpty(dirPath) {
   } catch {}
 }
 
+function buildTmpPath(finalPath) {
+  if (String(finalPath).toLowerCase().endsWith('.mp4')) {
+    return `${finalPath.slice(0, -4)}.tmp.mp4`;
+  }
+  return `${finalPath}.tmp.mp4`;
+}
+
+function validateTmpOutput(tmpPath) {
+  const stat = fs.statSync(tmpPath);
+  if (!stat.isFile() || stat.size <= 0) {
+    const e = new Error(`Temporary output invalid: ${tmpPath}`);
+    e.code = REASON_CODES.FFMPEG_EXIT_NONZERO;
+    throw e;
+  }
+}
+
+function reasonCodeFromError(err) {
+  if (!err?.code) return REASON_CODES.UNCAUGHT;
+  if (Object.values(REASON_CODES).includes(err.code)) return err.code;
+  if (err.code === 'UNSUPPORTED_AUDIO') return REASON_CODES.PROBE_FAILED;
+  if (err.code === 'FFMPEG_FAILED') return REASON_CODES.FFMPEG_EXIT_NONZERO;
+  if (err.code === 'CANCELLED') return REASON_CODES.CANCELLED;
+  if (err.code === 'TIMEOUT') return REASON_CODES.TIMEOUT;
+  return REASON_CODES.UNCAUGHT;
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1100,
@@ -374,7 +412,8 @@ ipcMain.handle('probe-audio', async (_event, filePath) => {
 ipcMain.handle('cancel-render', async () => {
   if (!currentJob.active) return true;
   currentJob.cancelled = true;
-  if (currentJob.ffmpeg && !currentJob.ffmpeg.killed) killProcessTree(currentJob.ffmpeg);
+  currentJob.cancelReason = REASON_CODES.CANCELLED;
+  cleanupJob(currentJob.id, REASON_CODES.CANCELLED, currentJob.cleanupContext);
   return true;
 });
 
@@ -383,6 +422,7 @@ function runFfmpegStillImage({
   audioPath,
   imagePath,
   outputPath,
+  progressOutputPath,
   presetKey,
   trackIndex,
   trackCount,
@@ -398,6 +438,7 @@ function runFfmpegStillImage({
   const videoArgs = typeof preset.video === 'function' ? preset.video() : preset.video;
   const vf = preset.vf;
   const log = typeof debugLog === 'function' ? debugLog : null;
+  const outputForProgress = progressOutputPath || outputPath;
 
   return new Promise(async (resolve, reject) => {
     const dSec = (Number.isFinite(durationSec) && durationSec > 0)
@@ -488,6 +529,7 @@ function runFfmpegStillImage({
     const timeout = setTimeout(() => {
       killedByTimeout = true;
       currentJob.cancelled = true;
+      currentJob.cancelReason = REASON_CODES.TIMEOUT;
       killProcessTree(ff);
     }, Math.max(10_000, timeoutMs || 0));
 
@@ -523,7 +565,7 @@ function runFfmpegStillImage({
                 trackIndex,
                 trackCount,
                 audioPath,
-                outputPath,
+                outputPath: outputForProgress,
                 percentTrack: pctTrack || 0,
                 percentTotal: Math.min(100, pctTotal),
                 indeterminate: false,
@@ -534,7 +576,7 @@ function runFfmpegStillImage({
                 trackIndex,
                 trackCount,
                 audioPath,
-                outputPath,
+                outputPath: outputForProgress,
                 percentTrack: 0,
                 percentTotal: totalDurationKnown && totalDurationSec > 0
                   ? ((elapsedBeforeSec || 0) / totalDurationSec) * 100
@@ -553,7 +595,7 @@ function runFfmpegStillImage({
             trackIndex,
             trackCount,
             audioPath,
-            outputPath,
+            outputPath: outputForProgress,
             percentTrack: 100,
             percentTotal: Math.min(100, pctTotal),
             indeterminate: false,
@@ -577,8 +619,8 @@ function runFfmpegStillImage({
       currentJob.ffmpeg = null;
 
       if (currentJob.cancelled) {
-        const e = new Error(killedByTimeout ? 'TIMEOUT' : 'CANCELLED');
-        e.code = killedByTimeout ? 'TIMEOUT' : 'CANCELLED';
+        const e = new Error(currentJob.cancelReason || (killedByTimeout ? REASON_CODES.TIMEOUT : REASON_CODES.CANCELLED));
+        e.code = currentJob.cancelReason || (killedByTimeout ? REASON_CODES.TIMEOUT : REASON_CODES.CANCELLED);
         reject(e);
         return;
       }
@@ -596,7 +638,7 @@ function runFfmpegStillImage({
 
       if (log) log(`ffmpeg error: ${msg}`);
       const e = new Error(msg);
-      e.code = 'FFMPEG_FAILED';
+      e.code = REASON_CODES.FFMPEG_EXIT_NONZERO;
       reject(e);
     };
 
@@ -629,18 +671,36 @@ ipcMain.handle('render-album', async (event, payload) => {
   });
   ensureWritableDir(exportFolder);
 
+  const jobId = `job-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  currentJob.id = jobId;
   currentJob.cancelled = false;
+  currentJob.cancelReason = null;
   currentJob.active = true;
+  currentJob.cleanupContext = {
+    cleanedUp: false,
+    getActiveProcess: () => currentJob.ffmpeg,
+    killProcessTree,
+    currentTrackTmpPath: null,
+    tmpPaths: new Set(),
+    stagingPaths: new Set(),
+    stagingClosers: new Set(),
+    outputFolder: exportFolder,
+    createAlbumFolder: Boolean(createAlbumFolder),
+    safeRmdirIfEmpty,
+  };
 
   const rendered = [];
   let debugLogger = null;
-  let currentOutputPath = null;
   let durations = [];
   let totalDurationSec = 0;
   let totalDurationKnown = false;
 
   try {
-    if (debug) debugLogger = createDebugLogger(exportFolder);
+    if (debug) {
+      debugLogger = createDebugLogger(exportFolder);
+      currentJob.cleanupContext.stagingPaths.add(debugLogger.path);
+      currentJob.cleanupContext.stagingClosers.add(() => debugLogger.close());
+    }
 
     const durationInfos = [];
     for (const t of tracks) {
@@ -651,7 +711,7 @@ ipcMain.handle('render-album', async (event, payload) => {
     const firstInvalid = durationInfos.findIndex((d) => !d?.ok);
     if (firstInvalid >= 0) {
       const e = new Error(`Unsupported audio file: ${tracks[firstInvalid]?.audioPath || 'unknown'}`);
-      e.code = 'UNSUPPORTED_AUDIO';
+      e.code = REASON_CODES.PROBE_FAILED;
       throw e;
     }
     durations = durationInfos.map((d) => d.durationSec || 0);
@@ -664,22 +724,26 @@ ipcMain.handle('render-album', async (event, payload) => {
 
     for (let i = 0; i < tracks.length; i++) {
       if (currentJob.cancelled) {
-        const e = new Error('CANCELLED');
-        e.code = 'CANCELLED';
+        const e = new Error(currentJob.cancelReason || REASON_CODES.CANCELLED);
+        e.code = currentJob.cancelReason || REASON_CODES.CANCELLED;
         throw e;
       }
 
       const audioPath = tracks[i].audioPath;
       const outputBase = sanitizeFileBaseName(tracks[i].outputBase || `Track ${i + 1}`);
       const outputPath = uniqueOutputPath(exportFolder, outputBase, '.mp4');
-      currentOutputPath = outputPath;
+      const tmpPath = buildTmpPath(outputPath);
+      safeUnlink(tmpPath);
+      currentJob.cleanupContext.currentTrackTmpPath = tmpPath;
+      currentJob.cleanupContext.tmpPaths.add(tmpPath);
       const elapsedBeforeSec = durations.slice(0, i).reduce((a, b) => a + b, 0);
 
       await runFfmpegStillImage({
         event,
         audioPath,
         imagePath,
-        outputPath,
+        outputPath: tmpPath,
+        progressOutputPath: outputPath,
         presetKey,
         trackIndex: i,
         trackCount: tracks.length,
@@ -691,26 +755,28 @@ ipcMain.handle('render-album', async (event, payload) => {
         totalDurationKnown,
       });
 
+      validateTmpOutput(tmpPath);
+      fs.renameSync(tmpPath, outputPath);
+      currentJob.cleanupContext.tmpPaths.delete(tmpPath);
+      currentJob.cleanupContext.currentTrackTmpPath = null;
       rendered.push({ audioPath, outputPath });
-      currentOutputPath = null;
     }
 
     return { ok: true, exportFolder, rendered, debugLogPath: debugLogger?.path || null };
   } catch (err) {
-    if (err?.code === 'CANCELLED') {
-    if (debugLogger) debugLogger.log('[export] cancelled - cleaning outputs');
-      rendered.forEach((r) => safeUnlink(r.outputPath));
-      safeUnlink(currentOutputPath);
-      safeUnlink(debugLogger?.path);
-      if (createAlbumFolder) safeRmdirIfEmpty(exportFolder);
-    }
+    const reasonCode = reasonCodeFromError(err);
+    cleanupJob(jobId, reasonCode, currentJob.cleanupContext);
     if (debugLogger?.path) {
       err.message = `${err.message}\nDebug log: ${debugLogger.path}`;
     }
     throw err;
   } finally {
     if (debugLogger) debugLogger.close();
+    currentJob.id = null;
     currentJob.active = false;
     currentJob.ffmpeg = null;
+    currentJob.cancelled = false;
+    currentJob.cancelReason = null;
+    currentJob.cleanupContext = null;
   }
 });

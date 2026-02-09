@@ -1,4 +1,5 @@
 const { spawn } = require("child_process");
+const fs = require("fs");
 const ffmpegPath = require("ffmpeg-static");
 
 function run(cmd, args) {
@@ -17,6 +18,13 @@ function run(cmd, args) {
 }
 
 async function renderOneTrack({ audioPath, imagePath, outputPath }) {
+  const tmpPath = String(outputPath).toLowerCase().endsWith(".mp4")
+    ? `${outputPath.slice(0, -4)}.tmp.mp4`
+    : `${outputPath}.tmp.mp4`;
+  try {
+    if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+  } catch {}
+
   // Para testes e2e: encode de áudio seguro para MP4 (robusto para wav/mp3/etc)
   await run(ffmpegPath, [
     "-y",
@@ -37,8 +45,14 @@ async function renderOneTrack({ audioPath, imagePath, outputPath }) {
     "aac",
     "-b:a",
     "320k",
-    outputPath,
+    tmpPath,
   ]);
+
+  const stat = fs.statSync(tmpPath);
+  if (!stat.isFile() || stat.size <= 0) {
+    throw new Error(`Invalid temporary output: ${tmpPath}`);
+  }
+  fs.renameSync(tmpPath, outputPath);
 }
 
 module.exports = { renderOneTrack };
