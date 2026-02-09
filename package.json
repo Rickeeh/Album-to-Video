@@ -27,6 +27,7 @@
       "main.js",
       "preload.js",
       "index.html",
+      "src/**/*",
       "node_modules/**/*"
     ],
     "mac": {
