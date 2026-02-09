@@ -444,6 +444,36 @@
     return cleaned || 'Untitled';
   }
 
+  function pathBasename(p) {
+    const normalized = String(p || '').replace(/\\/g, '/');
+    const parts = normalized.split('/').filter(Boolean);
+    return parts.length ? parts[parts.length - 1] : '';
+  }
+
+  function pathBasenameNoExt(p) {
+    const base = pathBasename(p);
+    const idx = base.lastIndexOf('.');
+    return idx > 0 ? base.slice(0, idx) : base;
+  }
+
+  function pathJoin(base, child) {
+    const lhs = String(base || '');
+    const rhs = String(child || '');
+    if (!lhs) return rhs;
+    const sep = lhs.includes('\\') && !lhs.includes('/') ? '\\' : '/';
+    const left = lhs.replace(/[\\/]+$/g, '');
+    const right = rhs.replace(/^[\\/]+/g, '');
+    return `${left}${sep}${right}`;
+  }
+
+  function filePathToUrl(p) {
+    const raw = String(p || '');
+    const normalized = raw.replace(/\\/g, '/');
+    if (/^[a-zA-Z]:\//.test(normalized)) return `file:///${encodeURI(normalized)}`;
+    if (normalized.startsWith('/')) return `file://${encodeURI(normalized)}`;
+    return `file://${encodeURI(normalized)}`;
+  }
+
   function stripLeadingTrackNumber(s) {
     return (s || '').replace(/^\s*\d+\s*[\.\-\_\)]\s*/g, '').trim();
   }
@@ -645,13 +675,13 @@
       for (const f of newFiles) {
         const probe = probeResults.get(f);
         if (!probe?.ok) {
-          const name = window.api.pathBasename(f);
+          const name = pathBasename(f);
           showToast(`Skipped unsupported file: ${name}`, 'warn', 3000);
           trackPathSet.delete(f);
           continue;
         }
 
-        const originalBaseRaw = window.api.pathBasenameNoExt(f);
+        const originalBaseRaw = pathBasenameNoExt(f);
         const originalBase = stripLeadingTrackNumber(originalBaseRaw);
 
         tracks.push({
@@ -711,11 +741,11 @@
     if (!file) return;
 
     imageFile = file;
-    const coverName = window.api.pathBasename(file);
+    const coverName = pathBasename(file);
     coverLabel.textContent = coverName;
     coverPreviewText.textContent = coverName;
 
-    coverImg.src = window.api.fileUrl(file);
+    coverImg.src = filePathToUrl(file);
     coverImg.style.display = 'block';
     coverPlaceholder.style.display = 'none';
   }
@@ -777,6 +807,15 @@
     }
   });
 
+  window.api.onRenderStatus(({ phase }) => {
+    if (!isRendering) return;
+    if (phase === 'planning') {
+      statusLine.textContent = 'Planning and probing';
+    } else if (phase === 'rendering') {
+      statusLine.textContent = 'Rendering';
+    }
+  });
+
   async function renderAll() {
     if (isRendering) return;
 
@@ -791,7 +830,7 @@
     let finalExportFolder = exportFolder;
     if (createAlbumFolderEl.checked) {
       const safeAlbum = sanitizeFolderName(albumNameEl.value);
-      finalExportFolder = window.api.pathJoin(exportFolder, safeAlbum);
+      finalExportFolder = pathJoin(exportFolder, safeAlbum);
       await window.api.ensureDir(finalExportFolder);
     }
     lastFinalExportFolder = finalExportFolder;

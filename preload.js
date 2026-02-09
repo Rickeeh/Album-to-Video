@@ -1,7 +1,5 @@
 // preload.js
 const { contextBridge, ipcRenderer } = require('electron');
-const { pathToFileURL } = require('url');
-const path = require('path');
 
 contextBridge.exposeInMainWorld('api', {
   selectAudios: () => ipcRenderer.invoke('select-audios'),
@@ -22,9 +20,9 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.on('render-progress', listener);
     return () => ipcRenderer.off('render-progress', listener);
   },
-
-  fileUrl: (p) => pathToFileURL(p).toString(),
-  pathBasename: (p) => path.basename(p),
-  pathBasenameNoExt: (p) => path.parse(p).name,
-  pathJoin: (...parts) => path.join(...parts),
+  onRenderStatus: (handler) => {
+    const listener = (_evt, data) => handler(data);
+    ipcRenderer.on('render-status', listener);
+    return () => ipcRenderer.off('render-status', listener);
+  },
 });
