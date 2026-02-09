@@ -320,6 +320,14 @@ function validateTmpOutput(tmpPath) {
   }
 }
 
+function humanMessageForReason(code, err) {
+  if (code === REASON_CODES.CANCELLED) return 'Render cancelled by user.';
+  if (code === REASON_CODES.TIMEOUT) return 'Render timed out before completion.';
+  if (code === REASON_CODES.PROBE_FAILED) return 'Input audio probe failed.';
+  if (code === REASON_CODES.FFMPEG_EXIT_NONZERO) return 'FFmpeg failed to encode one or more tracks.';
+  return String(err?.message || 'Unexpected render failure.');
+}
+
 function reasonCodeFromError(err) {
   if (!err?.code) return REASON_CODES.UNCAUGHT;
   if (Object.values(REASON_CODES).includes(err.code)) return err.code;
@@ -328,14 +336,6 @@ function reasonCodeFromError(err) {
   if (err.code === 'UNSUPPORTED_AUDIO') return REASON_CODES.PROBE_FAILED;
   if (err.code === 'FFMPEG_FAILED') return REASON_CODES.FFMPEG_EXIT_NONZERO;
   return REASON_CODES.UNCAUGHT;
-}
-
-function humanMessageForReason(code, err) {
-  if (code === REASON_CODES.CANCELLED) return 'Render cancelled by user.';
-  if (code === REASON_CODES.TIMEOUT) return 'Render timed out before completion.';
-  if (code === REASON_CODES.PROBE_FAILED) return 'Input audio probe failed.';
-  if (code === REASON_CODES.FFMPEG_EXIT_NONZERO) return 'FFmpeg failed to encode one or more tracks.';
-  return String(err?.message || 'Unexpected render failure.');
 }
 
 function sanitizePayload(payload) {
@@ -365,6 +365,25 @@ function writeRenderReport(exportFolder, report) {
   const reportPath = path.join(logsDir, 'render-report.json');
   fs.writeFileSync(reportPath, JSON.stringify(report, null, 2), 'utf8');
   return reportPath;
+}
+
+function isAudioCopyCompatibilityError(stderr) {
+  const lower = String(stderr || '').toLowerCase();
+  const markers = [
+    'could not find tag for codec',
+    'codec not currently supported in container',
+    'error initializing output stream',
+    'could not write header',
+    'tag mp4a',
+    'invalid argument',
+  ];
+  return markers.some((m) => lower.includes(m));
+}
+
+function extractFallbackReason(stderr) {
+  const lines = String(stderr || '').split(/\r?\n/).filter(Boolean);
+  const hit = lines.find((line) => /codec|container|tag|header|unsupported|invalid/i.test(line));
+  return (hit || tailLines(stderr, 1) || 'audio copy compatibility failure').slice(0, 240);
 }
 
 function createWindow() {
@@ -498,6 +517,8 @@ function runFfmpegStillImage({
   totalDurationSec,
   elapsedBeforeSec,
   totalDurationKnown,
+  audioMode,
+  jobId,
 }) {
   const preset = PRESETS[presetKey] || PRESETS.album_ep;
   const fps = GLOBAL_FPS;
@@ -535,6 +556,10 @@ function runFfmpegStillImage({
       }
       return Math.min(99.9, Math.max(0, pct));
     };
+    const audioArgs = audioMode === 'copy'
+      ? ['-c:a', 'copy']
+      : ['-c:a', 'aac', '-b:a', '320k'];
+
     const args = [
       '-y',
       '-nostdin',
@@ -549,6 +574,10 @@ function runFfmpegStillImage({
       // 2) Audio input
       '-i', audioPath,
 
+      // Explicit stream mapping for predictable output.
+      '-map', '0:v:0',
+      '-map', '1:a:0',
+
       // 3) Optional scaling (big speed win with huge cover art)
       ...(vf ? ['-vf', vf] : []),
 
@@ -558,7 +587,7 @@ function runFfmpegStillImage({
 
       // 5) Codec settings
       ...videoArgs,
-      ...preset.audio,
+      ...audioArgs,
 
       // 6) Fast start for web players
       '-movflags', '+faststart',
@@ -580,6 +609,8 @@ function runFfmpegStillImage({
       log(`outputPath: ${outputPath}`);
       log(`presetKey: ${presetKey || 'album_ep'}`);
       log(`fps: ${fps}`);
+      log(`jobId: ${jobId || ''}`);
+      log(`audioMode: ${audioMode || 'copy'}`);
       log(`durationSec: ${dSec || 0}`);
       log(`args: ${args.map(fmt).join(' ')}`);
       log(``);
@@ -684,16 +715,18 @@ function runFfmpegStillImage({
     const finalize = (ok, codeOrErr) => {
       clearTimeout(timeout);
       currentJob.ffmpeg = null;
+
       const endedAtMs = Date.now();
       const endedAt = new Date(endedAtMs).toISOString();
-
       if (currentJob.cancelled) {
-        const e = new Error(currentJob.cancelReason || (killedByTimeout ? REASON_CODES.TIMEOUT : REASON_CODES.CANCELLED));
-        e.code = currentJob.cancelReason || (killedByTimeout ? REASON_CODES.TIMEOUT : REASON_CODES.CANCELLED);
+        const reason = currentJob.cancelReason || (killedByTimeout ? REASON_CODES.TIMEOUT : REASON_CODES.CANCELLED);
+        const e = new Error(reason);
+        e.code = reason;
         e.exitCode = typeof codeOrErr === 'number' ? codeOrErr : null;
         e.stderr = stderr;
         e.stderrTail = tailLines(stderr, 50);
         e.ffmpegArgs = args;
+        e.audioMode = audioMode;
         e.startTs = startedAt;
         e.endTs = endedAt;
         e.durationMs = endedAtMs - startedAtMs;
@@ -709,6 +742,7 @@ function runFfmpegStillImage({
           exitCode: 0,
           stderr,
           stderrTail: tailLines(stderr, 50),
+          audioMode,
           startTs: startedAt,
           endTs: endedAt,
           durationMs: endedAtMs - startedAtMs,
@@ -729,6 +763,7 @@ function runFfmpegStillImage({
       e.stderr = stderr;
       e.stderrTail = tailLines(stderr, 50);
       e.ffmpegArgs = args;
+      e.audioMode = audioMode;
       e.startTs = startedAt;
       e.endTs = endedAt;
       e.durationMs = endedAtMs - startedAtMs;
@@ -765,10 +800,10 @@ ipcMain.handle('render-album', async (event, payload) => {
   ensureWritableDir(exportFolder);
 
   const jobId = `job-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  currentJob.id = jobId;
   currentJob.cancelled = false;
   currentJob.cancelReason = null;
   currentJob.active = true;
+  currentJob.id = jobId;
   currentJob.cleanupContext = {
     cleanedUp: false,
     getActiveProcess: () => currentJob.ffmpeg,
@@ -852,8 +887,8 @@ ipcMain.handle('render-album', async (event, payload) => {
 
       const audioPath = tracks[i].audioPath;
       const outputBase = sanitizeFileBaseName(tracks[i].outputBase || `Track ${i + 1}`);
-      const outputPath = uniqueOutputPath(exportFolder, outputBase, '.mp4');
-      const tmpPath = buildTmpPath(outputPath);
+      const outputFinalPath = uniqueOutputPath(exportFolder, outputBase, '.mp4');
+      const tmpPath = buildTmpPath(outputFinalPath);
       safeUnlink(tmpPath);
       currentJob.cleanupContext.currentTrackTmpPath = tmpPath;
       currentJob.cleanupContext.tmpPaths.add(tmpPath);
@@ -861,7 +896,7 @@ ipcMain.handle('render-album', async (event, payload) => {
       const trackReport = {
         inputPath: audioPath,
         durationSec: durations[i] || 0,
-        outputFinalPath: outputPath,
+        outputFinalPath,
         tmpPath,
         ffmpegArgs: [],
         startTs: null,
@@ -869,25 +904,69 @@ ipcMain.handle('render-album', async (event, payload) => {
         durationMs: null,
         exitCode: null,
         stderrTail: '',
+        audioMode: 'copy',
+        fallbackReason: null,
       };
       report.tracks.push(trackReport);
 
-      const runResult = await runFfmpegStillImage({
-        event,
-        audioPath,
-        imagePath,
-        outputPath: tmpPath,
-        progressOutputPath: outputPath,
-        presetKey,
-        trackIndex: i,
-        trackCount: tracks.length,
-        timeoutMs: timeoutPerTrackMs || 30 * 60 * 1000,
-        debugLog: debugLogger?.log,
-        durationSec: durations[i],
-        totalDurationSec,
-        elapsedBeforeSec,
-        totalDurationKnown,
-      });
+      let runResult = null;
+      let shouldFallback = false;
+      let fallbackReason = null;
+
+      try {
+        runResult = await runFfmpegStillImage({
+          event,
+          audioPath,
+          imagePath,
+          outputPath: tmpPath,
+          progressOutputPath: outputFinalPath,
+          presetKey,
+          trackIndex: i,
+          trackCount: tracks.length,
+          timeoutMs: timeoutPerTrackMs || 30 * 60 * 1000,
+          debugLog: debugLogger?.log,
+          durationSec: durations[i],
+          totalDurationSec,
+          elapsedBeforeSec,
+          totalDurationKnown,
+          audioMode: 'copy',
+          jobId,
+        });
+      } catch (err) {
+        shouldFallback = (
+          err?.code === REASON_CODES.FFMPEG_EXIT_NONZERO
+          && isAudioCopyCompatibilityError(err?.stderr || err?.stderrTail)
+        );
+
+        if (!shouldFallback) throw err;
+
+        fallbackReason = extractFallbackReason(err?.stderr || err?.stderrTail);
+        sessionLogger?.warn('render.audio_copy_fallback', { jobId, trackIndex: i, fallbackReason });
+        if (debugLogger) debugLogger.log(`[fallback] track=${i + 1} reason=${fallbackReason}`);
+        safeUnlink(tmpPath);
+
+        runResult = await runFfmpegStillImage({
+          event,
+          audioPath,
+          imagePath,
+          outputPath: tmpPath,
+          progressOutputPath: outputFinalPath,
+          presetKey,
+          trackIndex: i,
+          trackCount: tracks.length,
+          timeoutMs: timeoutPerTrackMs || 30 * 60 * 1000,
+          debugLog: debugLogger?.log,
+          durationSec: durations[i],
+          totalDurationSec,
+          elapsedBeforeSec,
+          totalDurationKnown,
+          audioMode: 'aac',
+          jobId,
+        });
+      }
+
+      trackReport.audioMode = shouldFallback ? 'aac-fallback' : 'copy';
+      trackReport.fallbackReason = fallbackReason;
       trackReport.ffmpegArgs = runResult.ffmpegArgs;
       trackReport.startTs = runResult.startTs;
       trackReport.endTs = runResult.endTs;
@@ -896,10 +975,11 @@ ipcMain.handle('render-album', async (event, payload) => {
       trackReport.stderrTail = runResult.stderrTail;
 
       validateTmpOutput(tmpPath);
-      fs.renameSync(tmpPath, outputPath);
+      fs.renameSync(tmpPath, outputFinalPath);
       currentJob.cleanupContext.tmpPaths.delete(tmpPath);
       currentJob.cleanupContext.currentTrackTmpPath = null;
-      rendered.push({ audioPath, outputPath });
+
+      rendered.push({ audioPath, outputPath: outputFinalPath });
     }
 
     report.job.status = 'SUCCESS';
@@ -956,17 +1036,18 @@ ipcMain.handle('render-album', async (event, payload) => {
         message: String(reportErr?.message || reportErr),
       });
     }
+
     if (debugLogger?.path) {
       err.message = `${err.message}\nDebug log: ${debugLogger.path}`;
     }
     throw err;
   } finally {
     if (debugLogger) debugLogger.close();
-    currentJob.id = null;
     currentJob.active = false;
     currentJob.ffmpeg = null;
     currentJob.cancelled = false;
     currentJob.cancelReason = null;
     currentJob.cleanupContext = null;
+    currentJob.id = null;
   }
 });
