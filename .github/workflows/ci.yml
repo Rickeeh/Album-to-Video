@@ -29,3 +29,6 @@ jobs:
 
       - name: Smoke test
         run: npm run test:smoke
+
+      - name: E2E render test
+	run: npm run test:e2e
