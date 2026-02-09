@@ -292,25 +292,13 @@
     <div class="row">
       <label style="display:flex; flex-direction:column; gap:6px;">
         <span style="color:var(--muted); font-weight:850; font-size:12px;">Preset</span>
-        <select id="presetSelect">
-          <option value="album_ep">Album / EP — Recommended</option>
-          <option value="single_track">Single / Track</option>
-          <option value="long_form">Long-form Audio</option>
-        </select>
+        <select id="presetSelect"></select>
       </label>
     </div>
 
     <div class="inline">
       <label><input type="checkbox" id="createAlbumFolder" checked /> Create release folder</label>
       <input type="text" id="albumName" placeholder="Release name" />
-    </div>
-
-    <div class="inline">
-      <label><input type="checkbox" id="prefixTrackNo" /> Prefix track number</label>
-    </div>
-
-    <div class="inline">
-      <label><input type="checkbox" id="debugMode" /> Debug log</label>
     </div>
 
     <div class="row">
@@ -367,8 +355,6 @@
   const presetSelect = document.getElementById('presetSelect');
   const createAlbumFolderEl = document.getElementById('createAlbumFolder');
   const albumNameEl = document.getElementById('albumName');
-  const prefixTrackNoEl = document.getElementById('prefixTrackNo');
-  const debugModeEl = document.getElementById('debugMode');
 
   const progressWrap = document.getElementById('progressWrap');
   const trackTitle = document.getElementById('trackTitle');
@@ -396,6 +382,7 @@
 
   let tracks = []; // { path, displayName, outputBase, originalBase, trackNo, hasTrackNo }
   let trackPathSet = new Set();
+  let nextTrackOrder = 1;
 
   let imageFile = null;
   let exportFolder = null;
@@ -405,6 +392,8 @@
   let renderQueue = [];
 
   let lastFinalExportFolder = null;
+  let presetCatalog = [];
+  let defaultPresetKey = 'album_ep';
 
   const uiDisableList = [
     btnAddTracks,
@@ -415,8 +404,6 @@
     presetSelect,
     createAlbumFolderEl,
     albumNameEl,
-    prefixTrackNoEl,
-    debugModeEl,
   ];
 
   function setUiLocked(locked) {
@@ -545,19 +532,32 @@
     openRow.style.display = 'none';
   }
 
+  function selectedPresetPolicy() {
+    const selected = presetCatalog.find((p) => p.key === presetSelect.value);
+    return selected?.policy || { ordering: 'input', prefixTrackNumber: false, maxTracks: null };
+  }
+
   function shouldAutoSortByTrackNo() {
     if (!tracks.length) return false;
-    return tracks.every(t => t.hasTrackNo === true);
+    const policy = selectedPresetPolicy();
+    if (policy.ordering !== 'track_no_if_all_present') return false;
+    return tracks.every((t) => t.hasTrackNo === true);
   }
 
   function sortTracksIfSafe() {
-    if (!shouldAutoSortByTrackNo()) return;
-    tracks.sort((a, b) => (a.trackNo - b.trackNo));
+    if (shouldAutoSortByTrackNo()) {
+      tracks.sort((a, b) => {
+        if (a.trackNo !== b.trackNo) return a.trackNo - b.trackNo;
+        return a.inputOrder - b.inputOrder;
+      });
+      return;
+    }
+    tracks.sort((a, b) => a.inputOrder - b.inputOrder);
   }
 
-  function buildOutputBaseForTrack(track, { prefix }) {
+  function buildOutputBaseForTrack(track) {
     const base = sanitizeFileBaseName(track.outputBase || track.originalBase);
-    if (!prefix) return base;
+    if (!selectedPresetPolicy().prefixTrackNumber) return base;
     if (!track.hasTrackNo) return base;
     const p = pad2(track.trackNo);
     if (!p) return base;
@@ -591,7 +591,7 @@
 
       const sub = document.createElement('div');
       sub.className = 'trackSub';
-      const outPreviewBase = buildOutputBaseForTrack(t, { prefix: prefixTrackNoEl.checked });
+      const outPreviewBase = buildOutputBaseForTrack(t);
       sub.textContent = `${t.originalBase}  →  ${outPreviewBase}.mp4`;
 
       text.appendChild(main);
@@ -622,6 +622,7 @@
   function clearTracksOnly() {
     tracks = [];
     trackPathSet = new Set();
+    nextTrackOrder = 1;
     renderTrackList();
   }
 
@@ -646,13 +647,56 @@
     clearCover();
     clearExportFolder();
     albumNameEl.value = '';
-    prefixTrackNoEl.checked = false;
-    debugModeEl.checked = false;
-    presetSelect.value = 'album_ep';
+    presetSelect.value = defaultPresetKey;
+    sortTracksIfSafe();
+    scheduleRenderTrackList();
     hideProgressUI();
   }
 
-  prefixTrackNoEl.addEventListener('change', () => scheduleRenderTrackList());
+  async function loadPresets() {
+    let presets = [];
+    try {
+      presets = await window.api.listPresets();
+    } catch {}
+
+    if (!Array.isArray(presets) || !presets.length) {
+      presets = [
+        {
+          key: 'album_ep',
+          label: 'Album / EP — Recommended',
+          policy: { ordering: 'track_no_if_all_present', prefixTrackNumber: true, maxTracks: null },
+          recommended: true,
+        },
+        {
+          key: 'single_track',
+          label: 'Single / Track',
+          policy: { ordering: 'input', prefixTrackNumber: false, maxTracks: 1 },
+          recommended: false,
+        },
+        {
+          key: 'long_form',
+          label: 'Long-form Audio',
+          policy: { ordering: 'input', prefixTrackNumber: false, maxTracks: null },
+          recommended: false,
+        },
+      ];
+    }
+
+    presetCatalog = presets;
+    presetSelect.innerHTML = '';
+    presets.forEach((preset) => {
+      const opt = document.createElement('option');
+      opt.value = preset.key;
+      opt.textContent = preset.label;
+      presetSelect.appendChild(opt);
+    });
+
+    const recommended = presets.find((p) => p.recommended) || presets[0];
+    defaultPresetKey = recommended.key;
+    presetSelect.value = defaultPresetKey;
+    sortTracksIfSafe();
+    scheduleRenderTrackList();
+  }
 
   async function pickAudios() {
     if (isValidating) return;
@@ -691,6 +735,7 @@
           originalBase,
           trackNo: null,
           hasTrackNo: false,
+          inputOrder: nextTrackOrder++,
         });
       }
 
@@ -824,6 +869,11 @@
     if (!exportFolder) { showToast('Choose export folder.', 'warn'); return; }
 
     const presetKey = presetSelect.value;
+    const presetPolicy = selectedPresetPolicy();
+    if (Number.isInteger(presetPolicy.maxTracks) && tracks.length > presetPolicy.maxTracks) {
+      showToast(`Selected preset allows up to ${presetPolicy.maxTracks} track(s).`, 'warn', 3500);
+      return;
+    }
     const toRender = [...tracks];
     renderQueue = toRender;
 
@@ -849,15 +899,16 @@
     statusLine.textContent = 'Starting export';
 
     const payload = {
-      tracks: toRender.map(t => ({
+      tracks: toRender.map((t) => ({
         audioPath: t.path,
-        outputBase: buildOutputBaseForTrack(t, { prefix: prefixTrackNoEl.checked }),
+        outputBase: sanitizeFileBaseName(t.outputBase || t.originalBase),
+        trackNo: t.trackNo,
+        hasTrackNo: t.hasTrackNo,
       })),
       imagePath: imageFile,
       exportFolder: finalExportFolder,
       presetKey,
       timeoutPerTrackMs: 30 * 60 * 1000,
-      debug: !!debugModeEl.checked,
       createAlbumFolder: !!createAlbumFolderEl.checked,
     };
 
@@ -899,10 +950,15 @@
   btnOpenFolder.addEventListener('click', openOutputFolder);
   renderBtn.addEventListener('click', renderAll);
   cancelBtn.addEventListener('click', cancelRender);
+  presetSelect.addEventListener('change', () => {
+    sortTracksIfSafe();
+    scheduleRenderTrackList();
+  });
 
   renderTrackList();
   clearCover();
   hideProgressUI();
+  loadPresets();
 </script>
 
 </body>

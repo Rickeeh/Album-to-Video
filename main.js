@@ -7,6 +7,7 @@ const { spawn } = require('child_process');
 const mm = require('music-metadata');
 const { cleanupJob } = require('./src/main/cleanup');
 const { createSessionLogger } = require('./src/main/logger');
+const { getPreset, listPresets } = require('./src/main/presets');
 
 // ✅ Bundled FFmpeg/FFprobe (no PATH dependency)
 let FFMPEG_BIN = null;
@@ -35,59 +36,10 @@ try {
 let mainWindow = null;
 let sessionLogger = null;
 
-const IS_MAC = process.platform === 'darwin';
-
 // 🎯 Performance principle:
 // - This app is a static-image publisher tool. We hard-lock 1fps globally.
 // - 1fps is the fastest, most stable choice for still-cover audio videos.
 const GLOBAL_FPS = 1;
-
-const sharedPresetEngine = {
-  // cap huge cover art to a sane size to avoid slow encodes on high-res JPEGs
-  vf: "scale='min(1920,iw)':'min(1080,ih)':force_original_aspect_ratio=decrease",
-  // Use VideoToolbox on macOS for extra speed; fallback to libx264 elsewhere.
-  video: () => {
-    if (IS_MAC) {
-      return [
-        '-c:v', 'h264_videotoolbox',
-        '-b:v', '6000k',
-        '-pix_fmt', 'yuv420p',
-      ];
-    }
-    return [
-      '-c:v', 'libx264',
-      // internally fast preset, but we hide this from UI naming
-      '-preset', 'veryfast',
-      '-tune', 'stillimage',
-      '-pix_fmt', 'yuv420p',
-      '-profile:v', 'high',
-      '-level', '4.1',
-      // 1fps: keep GOP minimal
-      '-g', '1',
-      '-keyint_min', '1',
-      '-sc_threshold', '0',
-    ];
-  },
-  audio: ['-c:a', 'aac', '-b:a', '256k'],
-};
-
-const PRESETS = {
-  // All presets use the same engine; only the intent label changes.
-  album_ep: {
-    label: 'Album / EP — Recommended',
-    ...sharedPresetEngine,
-  },
-
-  single_track: {
-    label: 'Single / Track',
-    ...sharedPresetEngine,
-  },
-
-  long_form: {
-    label: 'Long-form Audio',
-    ...sharedPresetEngine,
-  },
-};
 
 const currentJob = {
   id: null,
@@ -179,6 +131,19 @@ function formatTimestampForFile(d = new Date()) {
   const min = pad2(d.getMinutes());
   const s = pad2(d.getSeconds());
   return `${y}${m}${day}-${h}${min}${s}`;
+}
+
+function normalizeTrackNo(raw) {
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n <= 0) return null;
+  return n;
+}
+
+function buildOutputBaseForPreset(rawBase, trackNo, shouldPrefixTrackNo) {
+  const base = sanitizeFileBaseName(rawBase);
+  if (!shouldPrefixTrackNo || !Number.isInteger(trackNo) || trackNo <= 0) return base;
+  const prefixed = `${String(trackNo).padStart(2, '0')}. ${base}`;
+  return sanitizeFileBaseName(prefixed);
 }
 
 function createDebugLogger(exportFolder) {
@@ -352,10 +317,10 @@ function buildFfmpegArgsBase({
   presetKey,
   audioMode,
 }) {
-  const preset = PRESETS[presetKey] || PRESETS.album_ep;
+  const preset = getPreset(presetKey);
   const fps = GLOBAL_FPS;
-  const videoArgs = typeof preset.video === 'function' ? preset.video() : preset.video;
-  const vf = preset.vf;
+  const videoArgs = typeof preset.engine.video === 'function' ? preset.engine.video() : preset.engine.video;
+  const vf = preset.engine.vf;
   const audioArgs = audioMode === 'copy'
     ? ['-c:a', 'copy']
     : ['-c:a', 'aac', '-b:a', '320k'];
@@ -397,19 +362,66 @@ async function buildRenderPlan(payload) {
   assertFileReadable(imagePath, 'Cover art');
   ensureWritableDir(exportFolder);
 
-  const resolvedPresetKey = PRESETS[presetKey] ? presetKey : 'album_ep';
+  const preset = getPreset(presetKey);
+  const resolvedPresetKey = preset.key;
+  const policy = preset.policy || {};
+  const maxTracks = Number.isInteger(policy.maxTracks) ? policy.maxTracks : null;
+  if (Number.isInteger(maxTracks) && tracks.length > maxTracks) {
+    const e = new Error(`Preset "${preset.label}" supports up to ${maxTracks} track(s).`);
+    e.code = REASON_CODES.UNCAUGHT;
+    throw e;
+  }
+
+  const normalizedTracks = tracks.map((t, i) => {
+    if (!t?.audioPath || typeof t.audioPath !== 'string') {
+      throw new Error(`Invalid audio path for track ${i + 1}`);
+    }
+    const trackNo = normalizeTrackNo(t.trackNo);
+    const hasTrackNo = Boolean(t.hasTrackNo) && Number.isInteger(trackNo);
+    const outputBaseRaw = sanitizeFileBaseName(t.outputBase || `Track ${i + 1}`);
+    return {
+      audioPath: t.audioPath,
+      outputBaseRaw,
+      trackNo: hasTrackNo ? trackNo : null,
+      hasTrackNo,
+      inputIndex: i,
+    };
+  });
+
+  const orderingPolicy = policy.ordering || 'input';
+  const allTracksHaveTrackNo = normalizedTracks.length > 0
+    && normalizedTracks.every((t) => t.hasTrackNo && Number.isInteger(t.trackNo));
+  let orderingApplied = 'input';
+  let orderedTracks = normalizedTracks.slice();
+  if (orderingPolicy === 'track_no_if_all_present' && allTracksHaveTrackNo) {
+    orderedTracks.sort((a, b) => {
+      if (a.trackNo !== b.trackNo) return a.trackNo - b.trackNo;
+      return a.inputIndex - b.inputIndex;
+    });
+    orderingApplied = 'track_no';
+  }
+
+  const prefixTrackNumber = Boolean(policy.prefixTrackNumber);
+  const presetDecisions = {
+    orderingPolicy,
+    orderingApplied,
+    allTracksHaveTrackNo,
+    prefixTrackNumber,
+    maxTracks,
+  };
   const jobId = `job-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const reservedOutputs = new Set();
   const plannedTracks = [];
 
-  for (let i = 0; i < tracks.length; i++) {
-    const t = tracks[i];
-    if (!t?.audioPath || typeof t.audioPath !== 'string') {
-      throw new Error(`Invalid audio path for track ${i + 1}`);
-    }
+  for (let i = 0; i < orderedTracks.length; i++) {
+    const t = orderedTracks[i];
     assertFileReadable(t.audioPath, `Audio file ${i + 1}`);
 
-    const outputBase = sanitizeFileBaseName(t.outputBase || `Track ${i + 1}`);
+    const outputBase = buildOutputBaseForPreset(
+      t.outputBaseRaw,
+      t.trackNo,
+      prefixTrackNumber,
+    );
     const outputFinalPath = uniquePlannedOutputPath(exportFolder, outputBase, '.mp4', reservedOutputs);
     const tmpPath = buildTmpPath(outputFinalPath);
     const probe = await probeAudioInfo(t.audioPath, 5000);
@@ -422,6 +434,7 @@ async function buildRenderPlan(payload) {
 
     plannedTracks.push({
       audioPath: t.audioPath,
+      trackNo: t.trackNo,
       durationSec,
       outputBase,
       outputFinalPath,
@@ -440,6 +453,7 @@ async function buildRenderPlan(payload) {
     jobId,
     exportFolder,
     presetKey: resolvedPresetKey,
+    presetDecisions,
     imagePath,
     totalDurationSec,
     tracks: plannedTracks,
@@ -485,6 +499,8 @@ function sanitizePayload(payload) {
     ? payload.tracks.map((t) => ({
       audioPath: t?.audioPath || '',
       outputBase: t?.outputBase || '',
+      trackNo: Number.isFinite(Number(t?.trackNo)) ? Number(t.trackNo) : null,
+      hasTrackNo: Boolean(t?.hasTrackNo),
     }))
     : [];
 
@@ -600,6 +616,8 @@ ipcMain.handle('select-folder', async () => {
   const result = await dialog.showOpenDialog({ properties: ['openDirectory'] });
   return result.canceled ? null : (result.filePaths?.[0] || null);
 });
+
+ipcMain.handle('list-presets', async () => listPresets());
 
 ipcMain.handle('ensure-dir', async (_event, dirPath) => {
   ensureDir(dirPath);
@@ -922,6 +940,8 @@ ipcMain.handle('render-album', async (event, payload) => {
     ffprobePath: FFPROBE_BIN,
     ffmpegSource: FFMPEG_SOURCE,
     ffprobeSource: FFPROBE_SOURCE,
+    presetKey: plan.presetKey,
+    presetDecisions: plan.presetDecisions || null,
     payload: sanitizePayload(payload),
     plan,
     tracks: [],

@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld('api', {
 
   readMetadata: (filePath) => ipcRenderer.invoke('read-metadata', filePath),
   probeAudio: (filePath) => ipcRenderer.invoke('probe-audio', filePath),
+  listPresets: () => ipcRenderer.invoke('list-presets'),
 
   renderAlbum: (payload) => ipcRenderer.invoke('render-album', payload),
   cancelRender: () => ipcRenderer.invoke('cancel-render'),
