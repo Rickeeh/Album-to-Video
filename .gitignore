@@ -4,6 +4,9 @@ dist/
 out/
 build/
 logs/
+test-artifacts/
+tmp/
+fixtures/out*
 *.log
 **/render-report*.json
 *.tar.gz
