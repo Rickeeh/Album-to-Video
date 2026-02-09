@@ -1,9 +1,9 @@
-node_modules
-.DS_Store
-dist
-build
 node_modules/
-dist/
-build/
-*.tar.gz
 .DS_Store
+dist/
+out/
+build/
+logs/
+*.log
+**/render-report*.json
+*.tar.gz

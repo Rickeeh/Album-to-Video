@@ -8,7 +8,8 @@
     "start": "electron .",
     "build": "electron-builder --dir",
     "dist": "electron-builder",
-    "test:smoke": "node scripts/smoke-test.js"
+    "test:smoke": "node scripts/smoke-test.js",
+    "test:e2e": "node scripts/e2e-render-test.js"
   },
   "devDependencies": {
     "electron": "^40.0.0",
@@ -26,6 +27,7 @@
       "main.js",
       "preload.js",
       "index.html",
+      "src/**/*",
       "node_modules/**/*"
     ],
     "mac": {
