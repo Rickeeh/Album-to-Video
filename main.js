@@ -274,11 +274,6 @@ async function probeAudioInfo(audioPath, timeoutMs) {
   return { ok: hasAudio, durationSec: safeDuration };
 }
 
-async function probeDurationSeconds(audioPath, timeoutMs) {
-  const info = await probeAudioInfo(audioPath, timeoutMs || 5000);
-  return info.durationSec || 0;
-}
-
 function uniqueOutputPath(dir, baseName, ext) {
   const safeBase = sanitizeFileBaseName(baseName);
   let candidate = path.join(dir, `${safeBase}${ext}`);
@@ -290,6 +285,27 @@ function uniqueOutputPath(dir, baseName, ext) {
   }
 
   return path.join(dir, `${safeBase}-${Date.now()}${ext}`);
+}
+
+function uniquePlannedOutputPath(dir, baseName, ext, reserved) {
+  const safeBase = sanitizeFileBaseName(baseName);
+  let candidate = path.join(dir, `${safeBase}${ext}`);
+  if (!fs.existsSync(candidate) && !reserved.has(candidate)) {
+    reserved.add(candidate);
+    return candidate;
+  }
+
+  for (let i = 2; i < 10000; i++) {
+    candidate = path.join(dir, `${safeBase} (${i})${ext}`);
+    if (!fs.existsSync(candidate) && !reserved.has(candidate)) {
+      reserved.add(candidate);
+      return candidate;
+    }
+  }
+
+  const fallback = path.join(dir, `${safeBase}-${Date.now()}${ext}`);
+  reserved.add(fallback);
+  return fallback;
 }
 
 function safeUnlink(filePath) {
@@ -328,6 +344,106 @@ function resolveSystemVersion() {
 
 function buildOsDescriptor() {
   return `${process.platform} ${resolveSystemVersion()}`.trim();
+}
+
+function buildFfmpegArgsBase({
+  imagePath,
+  audioPath,
+  presetKey,
+  audioMode,
+}) {
+  const preset = PRESETS[presetKey] || PRESETS.album_ep;
+  const fps = GLOBAL_FPS;
+  const videoArgs = typeof preset.video === 'function' ? preset.video() : preset.video;
+  const vf = preset.vf;
+  const audioArgs = audioMode === 'copy'
+    ? ['-c:a', 'copy']
+    : ['-c:a', 'aac', '-b:a', '320k'];
+
+  return [
+    '-y',
+    '-nostdin',
+    '-loglevel', 'error',
+    '-loop', '1',
+    '-framerate', String(fps),
+    '-i', imagePath,
+    '-i', audioPath,
+    '-map', '0:v:0',
+    '-map', '1:a:0',
+    ...(vf ? ['-vf', vf] : []),
+    '-r', String(fps),
+    '-vsync', 'cfr',
+    ...videoArgs,
+    ...audioArgs,
+    '-movflags', '+faststart',
+    '-shortest',
+  ];
+}
+
+async function buildRenderPlan(payload) {
+  const {
+    tracks,
+    imagePath,
+    exportFolder,
+    presetKey,
+  } = payload || {};
+
+  ensureBundledBinaries();
+
+  if (!Array.isArray(tracks) || tracks.length === 0) throw new Error('No tracks to export');
+  if (!imagePath) throw new Error('Missing cover art');
+  if (!exportFolder) throw new Error('Missing export folder');
+
+  assertFileReadable(imagePath, 'Cover art');
+  ensureWritableDir(exportFolder);
+
+  const resolvedPresetKey = PRESETS[presetKey] ? presetKey : 'album_ep';
+  const jobId = `job-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const reservedOutputs = new Set();
+  const plannedTracks = [];
+
+  for (let i = 0; i < tracks.length; i++) {
+    const t = tracks[i];
+    if (!t?.audioPath || typeof t.audioPath !== 'string') {
+      throw new Error(`Invalid audio path for track ${i + 1}`);
+    }
+    assertFileReadable(t.audioPath, `Audio file ${i + 1}`);
+
+    const outputBase = sanitizeFileBaseName(t.outputBase || `Track ${i + 1}`);
+    const outputFinalPath = uniquePlannedOutputPath(exportFolder, outputBase, '.mp4', reservedOutputs);
+    const tmpPath = buildTmpPath(outputFinalPath);
+    const probe = await probeAudioInfo(t.audioPath, 5000);
+    const durationSec = Number(probe?.durationSec || 0);
+    if (!probe?.ok || !Number.isFinite(durationSec) || durationSec <= 0) {
+      const e = new Error(`Probe failed for track ${i + 1}: ${t.audioPath}`);
+      e.code = REASON_CODES.PROBE_FAILED;
+      throw e;
+    }
+
+    plannedTracks.push({
+      audioPath: t.audioPath,
+      durationSec,
+      outputBase,
+      outputFinalPath,
+      tmpPath,
+      ffmpegArgsBase: buildFfmpegArgsBase({
+        imagePath,
+        audioPath: t.audioPath,
+        presetKey: resolvedPresetKey,
+        audioMode: 'copy',
+      }),
+    });
+  }
+
+  const totalDurationSec = plannedTracks.reduce((sum, t) => sum + t.durationSec, 0);
+  return {
+    jobId,
+    exportFolder,
+    presetKey: resolvedPresetKey,
+    imagePath,
+    totalDurationSec,
+    tracks: plannedTracks,
+  };
 }
 
 function buildTmpPath(finalPath) {
@@ -531,10 +647,10 @@ ipcMain.handle('cancel-render', async () => {
 function runFfmpegStillImage({
   event,
   audioPath,
-  imagePath,
   outputPath,
   progressOutputPath,
-  presetKey,
+  ffmpegArgsBase,
+  logLevel,
   trackIndex,
   trackCount,
   timeoutMs,
@@ -546,17 +662,18 @@ function runFfmpegStillImage({
   audioMode,
   jobId,
 }) {
-  const preset = PRESETS[presetKey] || PRESETS.album_ep;
-  const fps = GLOBAL_FPS;
-  const videoArgs = typeof preset.video === 'function' ? preset.video() : preset.video;
-  const vf = preset.vf;
   const log = typeof debugLog === 'function' ? debugLog : null;
   const outputForProgress = progressOutputPath || outputPath;
+  const baseArgs = Array.isArray(ffmpegArgsBase) ? ffmpegArgsBase.slice() : [];
 
   return new Promise(async (resolve, reject) => {
-    const dSec = (Number.isFinite(durationSec) && durationSec > 0)
-      ? durationSec
-      : await probeDurationSeconds(audioPath, 5000);
+    const dSec = Number(durationSec || 0);
+    if (!Number.isFinite(dSec) || dSec <= 0) {
+      const e = new Error(`Invalid planned duration for track ${trackIndex + 1}`);
+      e.code = REASON_CODES.PROBE_FAILED;
+      reject(e);
+      return;
+    }
     const durationKnown = Number.isFinite(dSec) && dSec > 0.25;
     const durationMs = durationKnown ? Math.floor(dSec * 1000) : 0;
 
@@ -564,7 +681,7 @@ function runFfmpegStillImage({
     const STDERR_MAX = 64 * 1024;
     let killedByTimeout = false;
 
-    const logLevel = log ? 'info' : 'error';
+    const effectiveLogLevel = log ? 'info' : (logLevel || 'error');
     const startedAtMs = Date.now();
     const startedAt = new Date(startedAtMs).toISOString();
     let lastOutTimeMs = 0;
@@ -582,43 +699,9 @@ function runFfmpegStillImage({
       }
       return Math.min(99.9, Math.max(0, pct));
     };
-    const audioArgs = audioMode === 'copy'
-      ? ['-c:a', 'copy']
-      : ['-c:a', 'aac', '-b:a', '320k'];
-
     const args = [
-      '-y',
-      '-nostdin',
-      '-loglevel', logLevel,
-
-      // 1) Image input loop
-      '-loop', '1',
-      // set a low input framerate for the still image stream
-      '-framerate', String(fps),
-      '-i', imagePath,
-
-      // 2) Audio input
-      '-i', audioPath,
-
-      // Explicit stream mapping for predictable output.
-      '-map', '0:v:0',
-      '-map', '1:a:0',
-
-      // 3) Optional scaling (big speed win with huge cover art)
-      ...(vf ? ['-vf', vf] : []),
-
-      // 4) Force constant frame rate output
-      '-r', String(fps),
-      '-vsync', 'cfr',
-
-      // 5) Codec settings
-      ...videoArgs,
-      ...audioArgs,
-
-      // 6) Fast start for web players
-      '-movflags', '+faststart',
-
-      '-shortest',
+      ...baseArgs,
+      '-loglevel', effectiveLogLevel,
 
       // 7) Robust progress
       '-progress', 'pipe:1',
@@ -631,10 +714,7 @@ function runFfmpegStillImage({
       const fmt = (a) => (/[ \t]/.test(a) ? `"${String(a).replace(/"/g, '\\"')}"` : String(a));
       log(`--- Track ${trackIndex + 1}/${trackCount} ---`);
       log(`audioPath: ${audioPath}`);
-      log(`imagePath: ${imagePath}`);
       log(`outputPath: ${outputPath}`);
-      log(`presetKey: ${presetKey || 'album_ep'}`);
-      log(`fps: ${fps}`);
       log(`jobId: ${jobId || ''}`);
       log(`audioMode: ${audioMode || 'copy'}`);
       log(`durationSec: ${dSec || 0}`);
@@ -802,31 +882,13 @@ function runFfmpegStillImage({
 }
 
 ipcMain.handle('render-album', async (event, payload) => {
-  const {
-    tracks,
-    imagePath,
-    exportFolder,
-    presetKey,
-    timeoutPerTrackMs,
-    debug,
-    createAlbumFolder,
-  } = payload || {};
+  const { timeoutPerTrackMs, debug, createAlbumFolder } = payload || {};
 
-  if (!Array.isArray(tracks) || tracks.length === 0) throw new Error('No tracks to export');
-  if (!imagePath) throw new Error('Missing cover art');
-  if (!exportFolder) throw new Error('Missing export folder');
-  ensureBundledBinaries();
+  event.sender.send('render-status', { phase: 'planning' });
+  const plan = await buildRenderPlan(payload);
 
-  assertFileReadable(imagePath, 'Cover art');
-  tracks.forEach((t, idx) => {
-    if (!t?.audioPath || typeof t.audioPath !== 'string') {
-      throw new Error(`Invalid audio path for track ${idx + 1}`);
-    }
-    assertFileReadable(t.audioPath, `Audio file ${idx + 1}`);
-  });
-  ensureWritableDir(exportFolder);
-
-  const jobId = `job-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const jobId = plan.jobId;
+  const exportFolder = plan.exportFolder;
   currentJob.cancelled = false;
   currentJob.cancelReason = null;
   currentJob.active = true;
@@ -846,10 +908,10 @@ ipcMain.handle('render-album', async (event, payload) => {
   };
 
   const rendered = [];
+  const tracks = plan.tracks;
   let debugLogger = null;
-  let durations = [];
-  let totalDurationSec = 0;
-  let totalDurationKnown = false;
+  const totalDurationSec = plan.totalDurationSec;
+  const totalDurationKnown = totalDurationSec > 0;
   const jobStartedAtMs = Date.now();
   const report = {
     appVersion: app.getVersion(),
@@ -861,6 +923,7 @@ ipcMain.handle('render-album', async (event, payload) => {
     ffmpegSource: FFMPEG_SOURCE,
     ffprobeSource: FFPROBE_SOURCE,
     payload: sanitizePayload(payload),
+    plan,
     tracks: [],
     logs: {
       sessionLogPath: sessionLogger?.filePath || null,
@@ -884,22 +947,7 @@ ipcMain.handle('render-album', async (event, payload) => {
       currentJob.cleanupContext.stagingClosers.add(() => debugLogger.close());
     }
     sessionLogger?.info('render.start', { jobId, trackCount: tracks.length, exportFolder });
-
-    const durationInfos = [];
-    for (const t of tracks) {
-      // Pre-validate with ffprobe and cache durations for weighted progress.
-      const info = await probeAudioInfo(t.audioPath, 5000);
-      durationInfos.push(info);
-    }
-    const firstInvalid = durationInfos.findIndex((d) => !d?.ok);
-    if (firstInvalid >= 0) {
-      const e = new Error(`Unsupported audio file: ${tracks[firstInvalid]?.audioPath || 'unknown'}`);
-      e.code = REASON_CODES.PROBE_FAILED;
-      throw e;
-    }
-    durations = durationInfos.map((d) => d.durationSec || 0);
-    totalDurationSec = durations.reduce((a, b) => a + b, 0);
-    totalDurationKnown = durations.length > 0 && durations.every((d) => d > 0) && totalDurationSec > 0;
+    event.sender.send('render-status', { phase: 'rendering' });
 
     if (debugLogger) {
       debugLogger.log(`[probe] tracks=${tracks.length} totalDurationSec=${totalDurationSec.toFixed(3)} known=${totalDurationKnown}`);
@@ -912,19 +960,20 @@ ipcMain.handle('render-album', async (event, payload) => {
         throw e;
       }
 
-      const audioPath = tracks[i].audioPath;
-      const outputBase = sanitizeFileBaseName(tracks[i].outputBase || `Track ${i + 1}`);
-      const outputFinalPath = uniqueOutputPath(exportFolder, outputBase, '.mp4');
-      const tmpPath = buildTmpPath(outputFinalPath);
+      const trackPlan = tracks[i];
+      const audioPath = trackPlan.audioPath;
+      const outputFinalPath = trackPlan.outputFinalPath;
+      const tmpPath = trackPlan.tmpPath;
       safeUnlink(tmpPath);
       currentJob.cleanupContext.currentTrackTmpPath = tmpPath;
       currentJob.cleanupContext.tmpPaths.add(tmpPath);
-      const elapsedBeforeSec = durations.slice(0, i).reduce((a, b) => a + b, 0);
+      const elapsedBeforeSec = tracks.slice(0, i).reduce((a, t) => a + (t.durationSec || 0), 0);
       const trackReport = {
         inputPath: audioPath,
-        durationSec: durations[i] || 0,
+        durationSec: trackPlan.durationSec || 0,
         outputFinalPath,
         tmpPath,
+        ffmpegArgsBase: trackPlan.ffmpegArgsBase,
         ffmpegArgs: [],
         startTs: null,
         endTs: null,
@@ -944,15 +993,15 @@ ipcMain.handle('render-album', async (event, payload) => {
         runResult = await runFfmpegStillImage({
           event,
           audioPath,
-          imagePath,
           outputPath: tmpPath,
           progressOutputPath: outputFinalPath,
-          presetKey,
+          ffmpegArgsBase: trackPlan.ffmpegArgsBase,
+          logLevel: 'error',
           trackIndex: i,
           trackCount: tracks.length,
           timeoutMs: timeoutPerTrackMs || 30 * 60 * 1000,
           debugLog: debugLogger?.log,
-          durationSec: durations[i],
+          durationSec: trackPlan.durationSec,
           totalDurationSec,
           elapsedBeforeSec,
           totalDurationKnown,
@@ -975,15 +1024,20 @@ ipcMain.handle('render-album', async (event, payload) => {
         runResult = await runFfmpegStillImage({
           event,
           audioPath,
-          imagePath,
           outputPath: tmpPath,
           progressOutputPath: outputFinalPath,
-          presetKey,
+          ffmpegArgsBase: buildFfmpegArgsBase({
+            imagePath: plan.imagePath,
+            audioPath,
+            presetKey: plan.presetKey,
+            audioMode: 'aac',
+          }),
+          logLevel: 'error',
           trackIndex: i,
           trackCount: tracks.length,
           timeoutMs: timeoutPerTrackMs || 30 * 60 * 1000,
           debugLog: debugLogger?.log,
-          durationSec: durations[i],
+          durationSec: trackPlan.durationSec,
           totalDurationSec,
           elapsedBeforeSec,
           totalDurationKnown,
