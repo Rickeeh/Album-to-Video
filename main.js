@@ -9,27 +9,71 @@ const { cleanupJob } = require('./src/main/cleanup');
 const { createSessionLogger } = require('./src/main/logger');
 const { getPreset, listPresets } = require('./src/main/presets');
 
+const LOCAL_BIN_ROOT = path.join(__dirname, 'resources', 'bin');
+
 // ✅ Bundled FFmpeg/FFprobe (no PATH dependency)
 let FFMPEG_BIN = null;
 let FFPROBE_BIN = null;
 let FFMPEG_SOURCE = null;
 let FFPROBE_SOURCE = null;
+
+function isReadableFile(filePath) {
+  if (!filePath || !path.isAbsolute(filePath)) return false;
+  try {
+    const stat = fs.statSync(filePath);
+    if (!stat.isFile()) return false;
+    fs.accessSync(filePath, fs.constants.R_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function resolveVendoredMacBinary(binaryName) {
+  if (process.platform !== 'darwin') return null;
+  const archDir = `darwin-${process.arch}`;
+  const candidates = [];
+
+  if (process.resourcesPath && path.isAbsolute(process.resourcesPath)) {
+    candidates.push(path.join(process.resourcesPath, 'bin', archDir, binaryName));
+  }
+  candidates.push(path.join(LOCAL_BIN_ROOT, archDir, binaryName));
+
+  return candidates.find((candidate) => isReadableFile(candidate)) || null;
+}
+
+const vendoredFfmpeg = resolveVendoredMacBinary('ffmpeg');
+if (vendoredFfmpeg) {
+  FFMPEG_BIN = vendoredFfmpeg;
+  FFMPEG_SOURCE = 'vendored';
+}
+
+const vendoredFfprobe = resolveVendoredMacBinary('ffprobe');
+if (vendoredFfprobe) {
+  FFPROBE_BIN = vendoredFfprobe;
+  FFPROBE_SOURCE = 'vendored';
+}
+
 try {
   // ffmpeg-static exports an absolute path to the platform binary
   // eslint-disable-next-line global-require
-  const ffmpegStatic = require('ffmpeg-static');
-  if (typeof ffmpegStatic === 'string' && ffmpegStatic.length) {
-    FFMPEG_BIN = ffmpegStatic;
-    FFMPEG_SOURCE = 'bundled';
+  if (!FFMPEG_BIN) {
+    const ffmpegStatic = require('ffmpeg-static');
+    if (typeof ffmpegStatic === 'string' && ffmpegStatic.length) {
+      FFMPEG_BIN = ffmpegStatic;
+      FFMPEG_SOURCE = 'dependency';
+    }
   }
 } catch {}
 
 try {
   // eslint-disable-next-line global-require
-  const ffprobeInstaller = require('@ffprobe-installer/ffprobe');
-  if (ffprobeInstaller?.path) {
-    FFPROBE_BIN = ffprobeInstaller.path;
-    FFPROBE_SOURCE = 'bundled';
+  if (!FFPROBE_BIN) {
+    const ffprobeInstaller = require('@ffprobe-installer/ffprobe');
+    if (ffprobeInstaller?.path) {
+      FFPROBE_BIN = ffprobeInstaller.path;
+      FFPROBE_SOURCE = 'dependency';
+    }
   }
 } catch {}
 
@@ -476,12 +520,39 @@ function validateTmpOutput(tmpPath) {
   }
 }
 
+function firstLine(text) {
+  const raw = String(text || '').trim();
+  if (!raw) return '';
+  const line = raw.split(/\r?\n/).map((s) => s.trim()).find(Boolean);
+  return line || '';
+}
+
 function humanMessageForReason(code, err) {
-  if (code === REASON_CODES.CANCELLED) return 'Render cancelled by user.';
-  if (code === REASON_CODES.TIMEOUT) return 'Render timed out before completion.';
-  if (code === REASON_CODES.PROBE_FAILED) return 'Input audio probe failed.';
-  if (code === REASON_CODES.FFMPEG_EXIT_NONZERO) return 'FFmpeg failed to encode one or more tracks.';
-  return String(err?.message || 'Unexpected render failure.');
+  const raw = String(err?.message || '').trim();
+
+  if (code === REASON_CODES.CANCELLED) return 'Export cancelled.';
+  if (code === REASON_CODES.TIMEOUT) {
+    return 'Export timed out. Try fewer tracks or shorter files, then export again.';
+  }
+  if (code === REASON_CODES.PROBE_FAILED) {
+    return 'One or more audio files could not be read. Re-add the file or convert it to WAV, MP3, or M4A.';
+  }
+  if (code === REASON_CODES.FFMPEG_EXIT_NONZERO) {
+    return 'Encoding failed for at least one track. Try again, or enable debug logging for details.';
+  }
+
+  if (/No tracks to export/i.test(raw)) return 'No tracks selected. Add at least one audio file.';
+  if (/Missing cover art/i.test(raw)) return 'Cover art is missing. Choose an image before exporting.';
+  if (/Missing export folder/i.test(raw)) return 'Export folder is missing. Choose where to save the videos.';
+  if (/Preset ".*" supports up to \d+ track\(s\)\./i.test(raw)) return firstLine(raw);
+  if (/Export folder not writable/i.test(raw)) {
+    return 'The selected export folder is not writable. Choose a different folder.';
+  }
+  if (/Bundled ffmpeg is required but not available/i.test(raw) || /Bundled ffprobe is required but not available/i.test(raw)) {
+    return 'The render engine is unavailable in this build. Reinstall or rebuild the app.';
+  }
+
+  return firstLine(raw) || 'Unexpected export failure.';
 }
 
 function reasonCodeFromError(err) {
@@ -1138,10 +1209,15 @@ ipcMain.handle('render-album', async (event, payload) => {
       });
     }
 
-    if (debugLogger?.path) {
-      err.message = `${err.message}\nDebug log: ${debugLogger.path}`;
-    }
-    throw err;
+    const publicMessage = report.job.humanMessage || 'Unexpected export failure.';
+    const reportHint = reportPath ? `\nRender report: ${reportPath}` : '';
+    const debugHint = debugLogger?.path ? `\nDebug log: ${debugLogger.path}` : '';
+    const wrapped = new Error(`${publicMessage}${reportHint}${debugHint}`);
+    wrapped.code = reasonCode;
+    wrapped.reportPath = reportPath;
+    wrapped.debugLogPath = debugLogger?.path || null;
+    wrapped.cause = err;
+    throw wrapped;
   } finally {
     if (debugLogger) debugLogger.close();
     currentJob.active = false;
