@@ -204,29 +204,6 @@
   .statusLine{ margin-top:10px; font-size:13px; color: var(--muted); line-height:1.35; }
   .openRow{ margin-top:10px; display:none; }
   .appShell{ position:relative; }
-  .lockBadge{
-    position:absolute;
-    top:50%;
-    left:50%;
-    transform: translate(-50%, -50%);
-    z-index:20;
-    background: rgba(90,167,255,0.14);
-    border:1px solid rgba(143,198,255,0.45);
-    color: var(--accentSoft);
-    font-size:12px;
-    font-weight:700;
-    letter-spacing:0.8px;
-    padding:7px 12px;
-    border-radius:999px;
-    opacity:0;
-    transition: opacity 0.18s ease;
-    pointer-events:none;
-    text-transform: lowercase;
-    text-shadow: 0 0 12px rgba(143,198,255,0.35);
-  }
-  .locked .lockBadge{
-    opacity:1;
-  }
   .locked .card{
     opacity:0.78;
     filter: saturate(0.92);
@@ -263,11 +240,10 @@
 <body>
 
 <div class="appShell">
-<div class="lockBadge">export</div>
 <div class="topbar">
   <div>
     <div class="title">Album to Video</div>
-    <div class="subtitle">Static cover videos for audio releases.</div>
+    <div class="subtitle">Turn cover art and audio files into clean MP4 exports.</div>
   </div>
   <div class="topActions">
     <button class="secondary" id="btnNewAlbum">New</button>
@@ -293,6 +269,7 @@
       <label style="display:flex; flex-direction:column; gap:6px;">
         <span style="color:var(--muted); font-weight:850; font-size:12px;">Preset</span>
         <select id="presetSelect"></select>
+        <span id="presetDescription" style="color:var(--muted); font-size:12px; line-height:1.35; max-width:440px;"></span>
       </label>
     </div>
 
@@ -340,6 +317,9 @@
       <div class="openRow" id="openRow">
         <button class="secondary" id="btnOpenFolder">Open output folder</button>
       </div>
+      <div class="openRow" id="logsRow">
+        <button class="secondary" id="btnOpenLogs">Ver logs</button>
+      </div>
     </div>
   </div>
 </div>
@@ -373,6 +353,7 @@
   const countLabel = document.getElementById('countLabel');
 
   const presetSelect = document.getElementById('presetSelect');
+  const presetDescription = document.getElementById('presetDescription');
   const createAlbumFolderEl = document.getElementById('createAlbumFolder');
   const albumNameEl = document.getElementById('albumName');
 
@@ -391,6 +372,7 @@
 
   const openRow = document.getElementById('openRow');
   const toastWrap = document.getElementById('toastWrap');
+  const logsRow = document.getElementById('logsRow');
 
   const btnAddTracks = document.getElementById('btnAddTracks');
   const btnClearTracks = document.getElementById('btnClearTracks');
@@ -398,6 +380,7 @@
   const btnExport = document.getElementById('btnExport');
   const btnNewAlbum = document.getElementById('btnNewAlbum');
   const btnOpenFolder = document.getElementById('btnOpenFolder');
+  const btnOpenLogs = document.getElementById('btnOpenLogs');
   const coverPreview = document.querySelector('.coverPreview');
 
   let tracks = []; // { path, displayName, outputBase, originalBase, trackNo, hasTrackNo }
@@ -412,8 +395,10 @@
   let renderQueue = [];
 
   let lastFinalExportFolder = null;
+  let lastLogFolder = null;
   let presetCatalog = [];
   let defaultPresetKey = 'album_ep';
+  let statusResetTimer = null;
 
   const uiDisableList = [
     btnAddTracks,
@@ -433,6 +418,22 @@
     });
     renderBtn.disabled = !!locked;
     document.body.classList.toggle('locked', !!locked);
+  }
+
+  function clearStatusResetTimer() {
+    if (!statusResetTimer) return;
+    clearTimeout(statusResetTimer);
+    statusResetTimer = null;
+  }
+
+  function setStatus(text, resetAfterMs = 0) {
+    clearStatusResetTimer();
+    statusLine.textContent = text;
+    if (resetAfterMs > 0) {
+      statusResetTimer = setTimeout(() => {
+        if (!isRendering) statusLine.textContent = 'Ready.';
+      }, resetAfterMs);
+    }
   }
 
   function sanitizeFolderName(name) {
@@ -471,6 +472,15 @@
     const left = lhs.replace(/[\\/]+$/g, '');
     const right = rhs.replace(/^[\\/]+/g, '');
     return `${left}${sep}${right}`;
+  }
+
+  function pathDirname(p) {
+    const raw = String(p || '').replace(/\\/g, '/');
+    const noSlash = raw.replace(/\/+$/g, '');
+    if (!noSlash) return '';
+    const idx = noSlash.lastIndexOf('/');
+    if (idx <= 0) return '';
+    return noSlash.slice(0, idx);
   }
 
   function filePathToUrl(p) {
@@ -542,19 +552,36 @@
   }
 
   function showProgressUI() { progressWrap.style.display = 'block'; }
-  function hideProgressUI() {
+  function hideProgressUI({ preserveStatus = false } = {}) {
     progressWrap.style.display = 'none';
     trackFill.style.width = '0%';
     totalFill.style.width = '0%';
     trackFill.classList.remove('indeterminate');
     trackTitle.textContent = 'Current track: —';
-    statusLine.textContent = 'Ready.';
+    if (!preserveStatus) setStatus('Ready.');
     openRow.style.display = 'none';
+    logsRow.style.display = 'none';
   }
 
   function selectedPresetPolicy() {
     const selected = presetCatalog.find((p) => p.key === presetSelect.value);
     return selected?.policy || { ordering: 'input', prefixTrackNumber: false, maxTracks: null };
+  }
+
+  function describePreset(preset) {
+    if (!preset) return '';
+    if (preset.description) return preset.description;
+    const map = {
+      album_ep: 'Ideal for albums and EPs with multiple tracks in sequence.',
+      single_track: 'Best for a single-song export with a quick setup.',
+      long_form: 'Great for sets, podcasts, and long-form recordings.',
+    };
+    return map[preset.key] || '';
+  }
+
+  function updatePresetDescription() {
+    const selected = presetCatalog.find((p) => p.key === presetSelect.value);
+    presetDescription.textContent = describePreset(selected);
   }
 
   function shouldAutoSortByTrackNo() {
@@ -684,18 +711,21 @@
         {
           key: 'album_ep',
           label: 'Album / EP — Recommended',
+          description: 'Ideal for albums and EPs with multiple tracks in sequence.',
           policy: { ordering: 'track_no_if_all_present', prefixTrackNumber: true, maxTracks: null },
           recommended: true,
         },
         {
           key: 'single_track',
           label: 'Single / Track',
+          description: 'Best for a single-song export with a quick setup.',
           policy: { ordering: 'input', prefixTrackNumber: false, maxTracks: 1 },
           recommended: false,
         },
         {
           key: 'long_form',
           label: 'Long-form Audio',
+          description: 'Great for sets, podcasts, and long-form recordings.',
           policy: { ordering: 'input', prefixTrackNumber: false, maxTracks: null },
           recommended: false,
         },
@@ -714,6 +744,7 @@
     const recommended = presets.find((p) => p.recommended) || presets[0];
     defaultPresetKey = recommended.key;
     presetSelect.value = defaultPresetKey;
+    updatePresetDescription();
     sortTracksIfSafe();
     scheduleRenderTrackList();
   }
@@ -827,9 +858,22 @@
     await window.api.openFolder(lastFinalExportFolder);
   }
 
+  async function openLogsFolder() {
+    if (!lastLogFolder) return;
+    await window.api.openFolder(lastLogFolder);
+  }
+
+  function humanizeErrorMessage(raw) {
+    const msg = String(raw || '').trim();
+    if (!msg) return 'Export failed.';
+    const firstLine = msg.split(/\r?\n/).map((x) => x.trim()).find(Boolean) || '';
+    if (/cancel/i.test(firstLine)) return 'Export cancelled.';
+    if (/invoke|ipc|remote method/i.test(firstLine)) return 'The app could not complete this action.';
+    return firstLine.replace(/^Error:\s*/i, '');
+  }
+
   async function cancelRender() {
     if (!isRendering) return;
-    statusLine.textContent = 'Cancelling';
     await window.api.cancelRender();
   }
 
@@ -856,14 +900,6 @@
     const name = renderQueue?.[trackIndex]?.displayName || renderQueue?.[trackIndex]?.originalBase || '—';
     trackTitle.textContent = `Current track (${trackIndex + 1}/${trackCount}): ${name}`;
 
-    const trackPctLabel = indeterminate ? '--' : `${Number(percentTrack).toFixed(1)}%`;
-    const totalPctLabel = `${Number(percentTotal).toFixed(1)}%`;
-    if (trackCount <= 1) {
-      statusLine.textContent = `Exporting ${trackPctLabel}`;
-    } else {
-      statusLine.textContent = `Exporting ${trackIndex + 1}/${trackCount} · Track ${trackPctLabel} · Total ${totalPctLabel}`;
-    }
-
     if (isFinal) {
       trackFill.classList.remove('indeterminate');
       trackFill.style.width = '100%';
@@ -875,9 +911,9 @@
   window.api.onRenderStatus(({ phase }) => {
     if (!isRendering) return;
     if (phase === 'planning') {
-      statusLine.textContent = 'Planning and probing';
+      setStatus('Planning...');
     } else if (phase === 'rendering') {
-      statusLine.textContent = 'Rendering';
+      setStatus('Rendering...');
     }
   });
 
@@ -910,13 +946,15 @@
     totalFill.style.width = '0%';
     trackFill.classList.remove('indeterminate');
     openRow.style.display = 'none';
+    logsRow.style.display = 'none';
+    lastLogFolder = null;
 
     isRendering = true;
     setUiLocked(true);
     renderBtn.textContent = 'Exporting';
     cancelBtn.disabled = false;
 
-    statusLine.textContent = 'Starting export';
+    setStatus('Planning...');
 
     const payload = {
       tracks: toRender.map((t) => ({
@@ -936,32 +974,35 @@
       const res = await window.api.renderAlbum(payload);
       if (!res?.ok) {
         if (res?.error?.code === 'CANCELLED') {
-          statusLine.textContent = 'Cancelled.';
+          hideProgressUI({ preserveStatus: true });
+          setStatus('Cancelled.', 1200);
           showToast('Export cancelled.', 'warn');
         } else {
-          const msg = String(res?.error?.message || 'Unknown error');
-          statusLine.textContent = `Export stopped: ${msg}`;
-          showToast(`Export stopped: ${msg}`, 'warn', 5000);
+          const msg = humanizeErrorMessage(res?.error?.message || 'Unknown error');
+          hideProgressUI({ preserveStatus: true });
+          setStatus(`${msg} Ver logs.`);
+          const reportFolder = pathDirname(res?.reportPath || '');
+          if (reportFolder) {
+            lastLogFolder = reportFolder;
+            logsRow.style.display = 'block';
+          }
+          showToast(msg, 'warn', 5000);
         }
         return;
       }
 
+      setStatus('Done.');
       if (res?.debugLogPath) {
-        statusLine.textContent = `Done. Debug log: ${res.debugLogPath}`;
-      } else {
-        statusLine.textContent = 'Done.';
+        const debugFolder = pathDirname(res.debugLogPath);
+        if (debugFolder) lastLogFolder = debugFolder;
       }
       openRow.style.display = 'block';
     } catch (err) {
-      if (String(err?.message || err).includes('CANCELLED')) {
-        statusLine.textContent = 'Cancelled.';
-        showToast('Export cancelled.', 'warn');
-      } else {
-        console.error(err);
-        const msg = String(err?.message || err || 'Unknown error');
-        statusLine.textContent = `Export stopped: ${msg}`;
-        showToast(`Export stopped: ${msg}`, 'warn', 5000);
-      }
+      console.error(err);
+      const msg = humanizeErrorMessage(err?.message || err || 'Unknown error');
+      hideProgressUI({ preserveStatus: true });
+      setStatus(`${msg} Ver logs.`);
+      showToast(msg, 'warn', 5000);
     } finally {
       isRendering = false;
       setUiLocked(false);
@@ -980,9 +1021,11 @@
   btnExport.addEventListener('click', chooseFolder);
   btnNewAlbum.addEventListener('click', newAlbumReset);
   btnOpenFolder.addEventListener('click', openOutputFolder);
+  btnOpenLogs.addEventListener('click', openLogsFolder);
   renderBtn.addEventListener('click', renderAll);
   cancelBtn.addEventListener('click', cancelRender);
   presetSelect.addEventListener('change', () => {
+    updatePresetDescription();
     sortTracksIfSafe();
     scheduleRenderTrackList();
   });
