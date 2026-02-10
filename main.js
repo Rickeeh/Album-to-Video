@@ -511,7 +511,16 @@ function buildTmpPath(finalPath) {
   return `${finalPath}.tmp.mp4`;
 }
 
+function isTmpMp4Path(filePath) {
+  return String(filePath || '').toLowerCase().endsWith('.tmp.mp4');
+}
+
 function validateTmpOutput(tmpPath) {
+  if (!isTmpMp4Path(tmpPath)) {
+    const e = new Error(`Temporary output path invalid: ${tmpPath}`);
+    e.code = REASON_CODES.UNCAUGHT;
+    throw e;
+  }
   const stat = fs.statSync(tmpPath);
   if (!stat.isFile() || stat.size <= 0) {
     const e = new Error(`Temporary output invalid: ${tmpPath}`);
@@ -592,6 +601,17 @@ function writeRenderReport(exportFolder, report) {
   const logsDir = path.join(exportFolder, 'Logs');
   ensureDir(logsDir);
   const reportPath = path.join(logsDir, 'render-report.json');
+  fs.writeFileSync(reportPath, JSON.stringify(report, null, 2), 'utf8');
+  return reportPath;
+}
+
+function writeNonSuccessRenderReportToAppLogs(jobId, report) {
+  app.setAppLogsPath();
+  const logsRoot = app.getPath('logs');
+  const appLogDir = path.join(logsRoot, 'Album-to-Video');
+  ensureDir(appLogDir);
+  const safeJobId = sanitizeFileBaseName(jobId || `cancel-${formatTimestampForFile()}`);
+  const reportPath = path.join(appLogDir, `render-report-${safeJobId}.json`);
   fs.writeFileSync(reportPath, JSON.stringify(report, null, 2), 'utf8');
   return reportPath;
 }
@@ -729,7 +749,7 @@ ipcMain.handle('cancel-render', async () => {
   if (!currentJob.active) return true;
   currentJob.cancelled = true;
   currentJob.cancelReason = REASON_CODES.CANCELLED;
-  cleanupJob(currentJob.id, REASON_CODES.CANCELLED, currentJob.cleanupContext);
+  await cleanupJob(currentJob.id, REASON_CODES.CANCELLED, currentJob.cleanupContext);
   return true;
 });
 
@@ -756,6 +776,13 @@ function runFfmpegStillImage({
   const baseArgs = Array.isArray(ffmpegArgsBase) ? ffmpegArgsBase.slice() : [];
 
   return new Promise(async (resolve, reject) => {
+    if (!isTmpMp4Path(outputPath)) {
+      const e = new Error(`Render output must use .tmp.mp4 staging path: ${outputPath}`);
+      e.code = REASON_CODES.UNCAUGHT;
+      reject(e);
+      return;
+    }
+
     const dSec = Number(durationSec || 0);
     if (!Number.isFinite(dSec) || dSec <= 0) {
       const e = new Error(`Invalid planned duration for track ${trackIndex + 1}`);
@@ -984,10 +1011,15 @@ ipcMain.handle('render-album', async (event, payload) => {
   currentJob.id = jobId;
   currentJob.cleanupContext = {
     cleanedUp: false,
+    cleanupStats: null,
+    cleanupPromise: null,
     getActiveProcess: () => currentJob.ffmpeg,
     killProcessTree,
+    killWaitTimeoutMs: 1500,
     currentTrackTmpPath: null,
     tmpPaths: new Set(),
+    plannedFinalOutputs: new Set(plan.tracks.map((t) => t.outputFinalPath)),
+    completedFinalOutputs: new Set(),
     stagingPaths: new Set(),
     stagingClosers: new Set(),
     outputFolder: exportFolder,
@@ -1028,6 +1060,11 @@ ipcMain.handle('render-album', async (event, payload) => {
       endTs: null,
       durationMs: null,
     },
+    cleanup: {
+      cleanupDeletedTmpCount: 0,
+      cleanupDeletedFinalCount: 0,
+      cleanupRemovedEmptyFolder: false,
+    },
   };
   let reportPath = null;
 
@@ -1055,6 +1092,11 @@ ipcMain.handle('render-album', async (event, payload) => {
       const audioPath = trackPlan.audioPath;
       const outputFinalPath = trackPlan.outputFinalPath;
       const tmpPath = trackPlan.tmpPath;
+      if (!isTmpMp4Path(tmpPath)) {
+        const e = new Error(`Temporary output path invalid: ${tmpPath}`);
+        e.code = REASON_CODES.UNCAUGHT;
+        throw e;
+      }
       safeUnlink(tmpPath);
       currentJob.cleanupContext.currentTrackTmpPath = tmpPath;
       currentJob.cleanupContext.tmpPaths.add(tmpPath);
@@ -1150,6 +1192,7 @@ ipcMain.handle('render-album', async (event, payload) => {
       fs.renameSync(tmpPath, outputFinalPath);
       currentJob.cleanupContext.tmpPaths.delete(tmpPath);
       currentJob.cleanupContext.currentTrackTmpPath = null;
+      currentJob.cleanupContext.completedFinalOutputs.add(outputFinalPath);
 
       rendered.push({ audioPath, outputPath: outputFinalPath });
     }
@@ -1192,7 +1235,12 @@ ipcMain.handle('render-album', async (event, payload) => {
       }
     }
 
-    cleanupJob(jobId, reasonCode, currentJob.cleanupContext);
+    const cleanupStats = await cleanupJob(jobId, reasonCode, currentJob.cleanupContext);
+    report.cleanup = {
+      cleanupDeletedTmpCount: Number(cleanupStats?.cleanupDeletedTmpCount || 0),
+      cleanupDeletedFinalCount: Number(cleanupStats?.cleanupDeletedFinalCount || 0),
+      cleanupRemovedEmptyFolder: Boolean(cleanupStats?.cleanupRemovedEmptyFolder),
+    };
     sessionLogger?.error('render.failed', {
       jobId,
       reasonCode,
@@ -1201,7 +1249,7 @@ ipcMain.handle('render-album', async (event, payload) => {
     });
 
     try {
-      reportPath = writeRenderReport(exportFolder, report);
+      reportPath = writeNonSuccessRenderReportToAppLogs(jobId, report);
     } catch (reportErr) {
       sessionLogger?.error('report.write_failed', {
         jobId,

@@ -20,50 +20,126 @@ function collectTmpArtifacts(outputFolder) {
   }
 }
 
-function cleanupJob(jobId, reason, context) {
-  if (!context || context.cleanedUp) return;
-  context.cleanedUp = true;
+function waitProcessExit(proc, timeoutMs) {
+  return new Promise((resolve) => {
+    if (!proc || proc.exitCode !== null) {
+      resolve('already-exited');
+      return;
+    }
 
-  const logger = context.logger;
-  const logData = { jobId, reason };
-  if (logger?.info) logger.info('cleanup.start', logData);
+    let done = false;
+    let timer = null;
+    const finish = (result) => {
+      if (done) return;
+      done = true;
+      if (timer) clearTimeout(timer);
+      proc.removeListener('exit', onExit);
+      proc.removeListener('close', onClose);
+      resolve(result);
+    };
+    const onExit = () => finish('exit');
+    const onClose = () => finish('close');
 
-  const activeProcess = typeof context.getActiveProcess === 'function'
-    ? context.getActiveProcess()
-    : null;
-  if (activeProcess && !activeProcess.killed) {
-    try {
-      context.killProcessTree(activeProcess);
-      if (logger?.warn) logger.warn('cleanup.ffmpeg_killed', logData);
-    } catch (err) {
-      if (logger?.error) {
-        logger.error('cleanup.kill_failed', { ...logData, error: String(err?.message || err) });
+    proc.once('exit', onExit);
+    proc.once('close', onClose);
+
+    timer = setTimeout(() => finish('timeout'), Math.max(200, timeoutMs || 0));
+  });
+}
+
+function defaultCleanupStats() {
+  return {
+    cleanupDeletedTmpCount: 0,
+    cleanupDeletedFinalCount: 0,
+    cleanupRemovedEmptyFolder: false,
+  };
+}
+
+async function cleanupJob(jobId, reason, context) {
+  if (!context) return defaultCleanupStats();
+  if (context.cleanupPromise) return context.cleanupPromise;
+  if (context.cleanedUp) return context.cleanupStats || defaultCleanupStats();
+
+  context.cleanupPromise = (async () => {
+    context.cleanedUp = true;
+
+    const logger = context.logger;
+    const logData = { jobId, reason };
+    if (logger?.info) logger.info('cleanup.start', logData);
+    const stats = defaultCleanupStats();
+
+    const activeProcess = typeof context.getActiveProcess === 'function'
+      ? context.getActiveProcess()
+      : null;
+    if (activeProcess && !activeProcess.killed) {
+      try {
+        context.killProcessTree(activeProcess);
+        const waitOutcome = await waitProcessExit(activeProcess, context.killWaitTimeoutMs || 1500);
+        if (logger?.warn) logger.warn('cleanup.ffmpeg_killed', logData);
+        if (logger?.info) logger.info('cleanup.ffmpeg_wait', { ...logData, waitOutcome });
+      } catch (err) {
+        if (logger?.error) {
+          logger.error('cleanup.kill_failed', { ...logData, error: String(err?.message || err) });
+        }
       }
     }
-  }
 
-  const filesToDelete = new Set();
-  if (context.stagingClosers instanceof Set) {
-    for (const closer of context.stagingClosers) {
-      try { closer(); } catch {}
+    const filesToDelete = new Set();
+    if (context.stagingClosers instanceof Set) {
+      for (const closer of context.stagingClosers) {
+        try { closer(); } catch {}
+      }
     }
-  }
-  if (context.currentTrackTmpPath) filesToDelete.add(context.currentTrackTmpPath);
-  if (context.tmpPaths instanceof Set) {
-    for (const p of context.tmpPaths) filesToDelete.add(p);
-  }
-  if (context.stagingPaths instanceof Set) {
-    for (const p of context.stagingPaths) filesToDelete.add(p);
-  }
-  for (const p of collectTmpArtifacts(context.outputFolder)) filesToDelete.add(p);
+    if (context.currentTrackTmpPath) filesToDelete.add(context.currentTrackTmpPath);
+    if (context.tmpPaths instanceof Set) {
+      for (const p of context.tmpPaths) filesToDelete.add(p);
+    }
+    if (context.stagingPaths instanceof Set) {
+      for (const p of context.stagingPaths) filesToDelete.add(p);
+    }
+    for (const p of collectTmpArtifacts(context.outputFolder)) filesToDelete.add(p);
 
-  for (const p of filesToDelete) safeUnlink(p);
+    if (reason === 'CANCELLED' && context.plannedFinalOutputs instanceof Set) {
+      const completed = context.completedFinalOutputs instanceof Set
+        ? context.completedFinalOutputs
+        : new Set();
+      for (const p of context.plannedFinalOutputs) {
+        if (!completed.has(p)) filesToDelete.add(p);
+      }
+    }
 
-  if (context.createAlbumFolder && typeof context.safeRmdirIfEmpty === 'function') {
-    context.safeRmdirIfEmpty(context.outputFolder);
-  }
+    for (const p of filesToDelete) {
+      const lower = String(p || '').toLowerCase();
+      const existed = Boolean(p && fs.existsSync(p));
+      safeUnlink(p);
+      if (!existed) continue;
+      if (lower.endsWith('.tmp') || lower.includes('.tmp.')) stats.cleanupDeletedTmpCount += 1;
+      else if (lower.endsWith('.mp4')) stats.cleanupDeletedFinalCount += 1;
+    }
 
-  if (logger?.info) logger.info('cleanup.end', { ...logData, removedCount: filesToDelete.size });
+    if (context.createAlbumFolder) {
+      if (reason === 'CANCELLED') {
+        const completedCount = context.completedFinalOutputs instanceof Set
+          ? context.completedFinalOutputs.size
+          : 0;
+        if (completedCount === 0) {
+          try {
+            fs.rmSync(context.outputFolder, { recursive: true, force: true });
+          } catch {}
+          stats.cleanupRemovedEmptyFolder = !fs.existsSync(context.outputFolder);
+        }
+      } else if (typeof context.safeRmdirIfEmpty === 'function') {
+        context.safeRmdirIfEmpty(context.outputFolder);
+        stats.cleanupRemovedEmptyFolder = !fs.existsSync(context.outputFolder);
+      }
+    }
+
+    context.cleanupStats = stats;
+    if (logger?.info) logger.info('cleanup.end', { ...logData, removedCount: filesToDelete.size, ...stats });
+    return stats;
+  })();
+
+  return context.cleanupPromise;
 }
 
 module.exports = { cleanupJob };
