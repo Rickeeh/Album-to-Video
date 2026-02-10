@@ -29,6 +29,35 @@ function perfMark(mark, extra = {}) {
   else console.log('[perf]', payload);
 }
 
+function payloadKeys(payload) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return [];
+  return Object.keys(payload);
+}
+
+function logIpcHandlerFailure(methodName, err, payload) {
+  const details = {
+    code: 'IPC_HANDLER_FAILED',
+    methodName,
+    payloadKeys: payloadKeys(payload),
+    message: String(err?.message || err),
+    stack: String(err?.stack || err),
+  };
+
+  if (sessionLogger?.error) sessionLogger.error('ipc.handler_failed', details);
+  else console.error('[IPC_HANDLER_FAILED]', details);
+}
+
+function registerIpcHandler(methodName, handler) {
+  ipcMain.handle(methodName, async (event, payload) => {
+    try {
+      return await handler(event, payload);
+    } catch (err) {
+      logIpcHandlerFailure(methodName, err, payload);
+      throw err;
+    }
+  });
+}
+
 perfMark('app.start', { pid: process.pid, platform: process.platform, arch: process.arch });
 
 const LOCAL_BIN_ROOT = path.join(__dirname, 'resources', 'bin');
@@ -703,15 +732,22 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
-  sessionLogger = createSessionLogger(app, { appFolderName: 'Album-to-Video', keepLatest: 20 });
   perfMark('app.ready');
-  sessionLogger.info('app.ready', {
-    appVersion: app.getVersion(),
-    electronVersion: process.versions.electron,
-    platform: process.platform,
-    arch: process.arch,
-  });
   createWindow();
+  // Keep window creation first; non-UI startup work runs after the window begins loading.
+  setTimeout(() => {
+    try {
+      sessionLogger = createSessionLogger(app, { appFolderName: 'Album-to-Video', keepLatest: 20 });
+      sessionLogger.info('app.ready', {
+        appVersion: app.getVersion(),
+        electronVersion: process.versions.electron,
+        platform: process.platform,
+        arch: process.arch,
+      });
+    } catch (err) {
+      console.error('[session_logger_init_failed]', String(err?.message || err));
+    }
+  }, 0);
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
@@ -727,7 +763,7 @@ app.on('before-quit', () => {
 });
 
 // ---------------- Dialogs ----------------
-ipcMain.handle('select-audios', async () => {
+registerIpcHandler('select-audios', async () => {
   const result = await dialog.showOpenDialog({
     properties: ['openFile', 'multiSelections'],
     filters: [
@@ -738,7 +774,7 @@ ipcMain.handle('select-audios', async () => {
   return result.canceled ? [] : (result.filePaths || []);
 });
 
-ipcMain.handle('select-image', async () => {
+registerIpcHandler('select-image', async () => {
   const result = await dialog.showOpenDialog({
     properties: ['openFile'],
     filters: [
@@ -749,19 +785,19 @@ ipcMain.handle('select-image', async () => {
   return result.canceled ? null : (result.filePaths?.[0] || null);
 });
 
-ipcMain.handle('select-folder', async () => {
+registerIpcHandler('select-folder', async () => {
   const result = await dialog.showOpenDialog({ properties: ['openDirectory'] });
   return result.canceled ? null : (result.filePaths?.[0] || null);
 });
 
-ipcMain.handle('list-presets', async () => listPresets());
+registerIpcHandler('list-presets', async () => listPresets());
 
-ipcMain.handle('ensure-dir', async (_event, dirPath) => {
+registerIpcHandler('ensure-dir', async (_event, dirPath) => {
   ensureDir(dirPath);
   return true;
 });
 
-ipcMain.handle('open-folder', async (_event, folderPath) => {
+registerIpcHandler('open-folder', async (_event, folderPath) => {
   await shell.openPath(folderPath);
   return true;
 });
@@ -773,7 +809,7 @@ ipcMain.on('perf-mark', (_event, payload) => {
 });
 
 // ---------------- Metadata ----------------
-ipcMain.handle('read-metadata', async (_event, filePath) => {
+registerIpcHandler('read-metadata', async (_event, filePath) => {
   try {
     const meta = await mm.parseFile(filePath, { duration: false });
     const artist = (meta.common.artist || meta.common?.artists?.[0] || '').trim();
@@ -788,7 +824,7 @@ ipcMain.handle('read-metadata', async (_event, filePath) => {
   }
 });
 
-ipcMain.handle('probe-audio', async (_event, filePath) => {
+registerIpcHandler('probe-audio', async (_event, filePath) => {
   try {
     return await probeAudioInfo(filePath, 5000);
   } catch {
@@ -797,7 +833,7 @@ ipcMain.handle('probe-audio', async (_event, filePath) => {
 });
 
 // ---------------- Render job (album-level) ----------------
-ipcMain.handle('cancel-render', async () => {
+registerIpcHandler('cancel-render', async () => {
   if (!currentJob.active) return true;
   currentJob.cancelled = true;
   currentJob.cancelReason = REASON_CODES.CANCELLED;
@@ -1049,7 +1085,7 @@ function runFfmpegStillImage({
   });
 }
 
-ipcMain.handle('render-album', async (event, payload) => {
+registerIpcHandler('render-album', async (event, payload) => {
   const { timeoutPerTrackMs, debug, createAlbumFolder } = payload || {};
 
   event.sender.send('render-status', { phase: 'planning' });

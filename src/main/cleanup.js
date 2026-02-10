@@ -100,11 +100,9 @@ async function cleanupJob(jobId, reason, context) {
     for (const p of collectTmpArtifacts(context.outputFolder)) filesToDelete.add(p);
 
     if (reason === 'CANCELLED' && context.plannedFinalOutputs instanceof Set) {
-      const completed = context.completedFinalOutputs instanceof Set
-        ? context.completedFinalOutputs
-        : new Set();
-      for (const p of context.plannedFinalOutputs) {
-        if (!completed.has(p)) filesToDelete.add(p);
+      for (const p of context.plannedFinalOutputs) filesToDelete.add(p);
+      if (context.outputFolder) {
+        filesToDelete.add(path.join(context.outputFolder, 'Logs', 'render-report.json'));
       }
     }
 
@@ -119,15 +117,10 @@ async function cleanupJob(jobId, reason, context) {
 
     if (context.createAlbumFolder) {
       if (reason === 'CANCELLED') {
-        const completedCount = context.completedFinalOutputs instanceof Set
-          ? context.completedFinalOutputs.size
-          : 0;
-        if (completedCount === 0) {
-          try {
-            fs.rmSync(context.outputFolder, { recursive: true, force: true });
-          } catch {}
-          stats.cleanupRemovedEmptyFolder = !fs.existsSync(context.outputFolder);
-        }
+        try {
+          fs.rmSync(context.outputFolder, { recursive: true, force: true });
+        } catch {}
+        stats.cleanupRemovedEmptyFolder = !fs.existsSync(context.outputFolder);
       } else if (typeof context.safeRmdirIfEmpty === 'function') {
         context.safeRmdirIfEmpty(context.outputFolder);
         stats.cleanupRemovedEmptyFolder = !fs.existsSync(context.outputFolder);

@@ -27,6 +27,22 @@
   .title{ font-size:20px; font-weight:900; letter-spacing:0.2px; }
   .subtitle{ font-size:13px; color:var(--muted); margin-top:6px; max-width:860px; line-height:1.35; }
   .topActions{ display:flex; gap:13px; align-items:center; flex-wrap:wrap; }
+  .readyBadge{
+    border:1px solid rgba(143,198,255,0.32);
+    color: var(--accentSoft);
+    font-size:11px;
+    font-weight:800;
+    letter-spacing:0.3px;
+    text-transform:uppercase;
+    padding:6px 9px;
+    border-radius:999px;
+    background: rgba(143,198,255,0.08);
+  }
+  .readyBadge.ready{
+    border-color: rgba(107,232,157,0.35);
+    color: #8ff0b6;
+    background: rgba(107,232,157,0.09);
+  }
   .grid{ display:grid; grid-template-columns: 1.6fr 1fr; gap:21px; }
   .card{
     background: linear-gradient(180deg, var(--panel), var(--panel2));
@@ -270,6 +286,7 @@
     <div class="subtitle">Static cover videos for audio releases.</div>
   </div>
   <div class="topActions">
+    <div class="readyBadge" id="readyBadge">Starting...</div>
     <button class="secondary" id="btnNewAlbum">New</button>
   </div>
 </div>
@@ -391,6 +408,7 @@
 
   const openRow = document.getElementById('openRow');
   const toastWrap = document.getElementById('toastWrap');
+  const readyBadge = document.getElementById('readyBadge');
 
   const btnAddTracks = document.getElementById('btnAddTracks');
   const btnClearTracks = document.getElementById('btnClearTracks');
@@ -433,6 +451,12 @@
     });
     renderBtn.disabled = !!locked;
     document.body.classList.toggle('locked', !!locked);
+  }
+
+  function setReadyState(text, ready) {
+    if (!readyBadge) return;
+    readyBadge.textContent = text;
+    readyBadge.classList.toggle('ready', !!ready);
   }
 
   function sanitizeFolderName(name) {
@@ -978,6 +1002,7 @@
   renderTrackList();
   clearCover();
   hideProgressUI();
+  setReadyState('Ready', true);
   loadPresets();
 </script>
 
