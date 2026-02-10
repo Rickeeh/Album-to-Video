@@ -103,14 +103,24 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build macOS unsigned (fallback)
-        if: runner.os == 'macOS' && (secrets.CSC_LINK == '' || secrets.APPLE_ID == '' || secrets.APPLE_APP_SPECIFIC_PASSWORD == '' || secrets.APPLE_TEAM_ID == '')
+      - name: Detect signing secrets
+        if: runner.os == 'macOS'
+        id: signcheck
+        run: |
+          if [ -n "${{ secrets.CSC_LINK }}" ] && [ -n "${{ secrets.APPLE_ID }}" ] && [ -n "${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}" ] && [ -n "${{ secrets.APPLE_TEAM_ID }}" ]; then
+            echo "HAS_SIGNING_SECRETS=true" >> $GITHUB_ENV
+          else
+            echo "HAS_SIGNING_SECRETS=false" >> $GITHUB_ENV
+          fi
+
+      - name: Build macOS (unsigned)
+        if: runner.os == 'macOS' && env.HAS_SIGNING_SECRETS == 'false'
         run: npm run dist:mac
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
 
-      - name: Build macOS signed + notarized
-        if: runner.os == 'macOS' && secrets.CSC_LINK != '' && secrets.APPLE_ID != '' && secrets.APPLE_APP_SPECIFIC_PASSWORD != '' && secrets.APPLE_TEAM_ID != ''
+      - name: Build macOS (signed + notarized)
+        if: runner.os == 'macOS' && env.HAS_SIGNING_SECRETS == 'true'
         run: npm run dist:mac
         env:
           CSC_LINK: ${{ secrets.CSC_LINK }}
