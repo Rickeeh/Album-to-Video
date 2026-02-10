@@ -4,7 +4,6 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const { spawn } = require('child_process');
-const mm = require('music-metadata');
 const { cleanupJob } = require('./src/main/cleanup');
 const { createSessionLogger } = require('./src/main/logger');
 const { getPreset, listPresets } = require('./src/main/presets');
@@ -68,6 +67,7 @@ let FFPROBE_BIN = null;
 let FFMPEG_SOURCE = null;
 let FFPROBE_SOURCE = null;
 let binariesResolved = false;
+let musicMetadataModule = null;
 
 function isReadableFile(filePath) {
   if (!filePath || !path.isAbsolute(filePath)) return false;
@@ -168,6 +168,15 @@ function ensureBundledBinaries() {
     e.code = REASON_CODES.UNCAUGHT;
     throw e;
   }
+}
+
+function getMusicMetadata() {
+  if (!musicMetadataModule) {
+    // Lazy-load: avoid loading this dependency during app startup.
+    // eslint-disable-next-line global-require
+    musicMetadataModule = require('music-metadata');
+  }
+  return musicMetadataModule;
 }
 
 function ensureDir(dirPath) {
@@ -811,6 +820,7 @@ ipcMain.on('perf-mark', (_event, payload) => {
 // ---------------- Metadata ----------------
 registerIpcHandler('read-metadata', async (_event, filePath) => {
   try {
+    const mm = getMusicMetadata();
     const meta = await mm.parseFile(filePath, { duration: false });
     const artist = (meta.common.artist || meta.common?.artists?.[0] || '').trim();
     const title = (meta.common.title || '').trim();
@@ -1346,14 +1356,17 @@ registerIpcHandler('render-album', async (event, payload) => {
     }
 
     const publicMessage = report.job.humanMessage || 'Unexpected export failure.';
-    const reportHint = reportPath ? `\nRender report: ${reportPath}` : '';
-    const debugHint = debugLogger?.path ? `\nDebug log: ${debugLogger.path}` : '';
-    const wrapped = new Error(`${publicMessage}${reportHint}${debugHint}`);
-    wrapped.code = reasonCode;
-    wrapped.reportPath = reportPath;
-    wrapped.debugLogPath = debugLogger?.path || null;
-    wrapped.cause = err;
-    throw wrapped;
+    return {
+      ok: false,
+      error: {
+        code: reasonCode,
+        message: publicMessage,
+      },
+      reportPath: reportPath || null,
+      debugLogPath: debugLogger?.path || null,
+      exportFolder,
+      rendered,
+    };
   } finally {
     if (debugLogger) debugLogger.close();
     currentJob.active = false;
