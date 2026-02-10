@@ -9,6 +9,28 @@ const { cleanupJob } = require('./src/main/cleanup');
 const { createSessionLogger } = require('./src/main/logger');
 const { getPreset, listPresets } = require('./src/main/presets');
 
+let mainWindow = null;
+let sessionLogger = null;
+
+const APP_START_NS = process.hrtime.bigint();
+function msSinceAppStart() {
+  return Number((process.hrtime.bigint() - APP_START_NS) / 1000000n);
+}
+
+function perfMark(mark, extra = {}) {
+  const payload = {
+    mark,
+    msFromStart: msSinceAppStart(),
+    ts: new Date().toISOString(),
+    ...extra,
+  };
+
+  if (sessionLogger?.info) sessionLogger.info('perf.mark', payload);
+  else console.log('[perf]', payload);
+}
+
+perfMark('app.start', { pid: process.pid, platform: process.platform, arch: process.arch });
+
 const LOCAL_BIN_ROOT = path.join(__dirname, 'resources', 'bin');
 
 // ✅ Bundled FFmpeg/FFprobe (no PATH dependency)
@@ -16,6 +38,7 @@ let FFMPEG_BIN = null;
 let FFPROBE_BIN = null;
 let FFMPEG_SOURCE = null;
 let FFPROBE_SOURCE = null;
+let binariesResolved = false;
 
 function isReadableFile(filePath) {
   if (!filePath || !path.isAbsolute(filePath)) return false;
@@ -42,43 +65,45 @@ function resolveVendoredMacBinary(binaryName) {
   return candidates.find((candidate) => isReadableFile(candidate)) || null;
 }
 
-const vendoredFfmpeg = resolveVendoredMacBinary('ffmpeg');
-if (vendoredFfmpeg) {
-  FFMPEG_BIN = vendoredFfmpeg;
-  FFMPEG_SOURCE = 'vendored';
-}
+function resolveBundledBinaries() {
+  if (binariesResolved) return;
+  binariesResolved = true;
 
-const vendoredFfprobe = resolveVendoredMacBinary('ffprobe');
-if (vendoredFfprobe) {
-  FFPROBE_BIN = vendoredFfprobe;
-  FFPROBE_SOURCE = 'vendored';
-}
-
-try {
-  // ffmpeg-static exports an absolute path to the platform binary
-  // eslint-disable-next-line global-require
-  if (!FFMPEG_BIN) {
-    const ffmpegStatic = require('ffmpeg-static');
-    if (typeof ffmpegStatic === 'string' && ffmpegStatic.length) {
-      FFMPEG_BIN = ffmpegStatic;
-      FFMPEG_SOURCE = 'dependency';
-    }
+  const vendoredFfmpeg = resolveVendoredMacBinary('ffmpeg');
+  if (vendoredFfmpeg) {
+    FFMPEG_BIN = vendoredFfmpeg;
+    FFMPEG_SOURCE = 'vendored';
   }
-} catch {}
 
-try {
-  // eslint-disable-next-line global-require
-  if (!FFPROBE_BIN) {
-    const ffprobeInstaller = require('@ffprobe-installer/ffprobe');
-    if (ffprobeInstaller?.path) {
-      FFPROBE_BIN = ffprobeInstaller.path;
-      FFPROBE_SOURCE = 'dependency';
-    }
+  const vendoredFfprobe = resolveVendoredMacBinary('ffprobe');
+  if (vendoredFfprobe) {
+    FFPROBE_BIN = vendoredFfprobe;
+    FFPROBE_SOURCE = 'vendored';
   }
-} catch {}
 
-let mainWindow = null;
-let sessionLogger = null;
+  try {
+    // ffmpeg-static exports an absolute path to the platform binary
+    // eslint-disable-next-line global-require
+    if (!FFMPEG_BIN) {
+      const ffmpegStatic = require('ffmpeg-static');
+      if (typeof ffmpegStatic === 'string' && ffmpegStatic.length) {
+        FFMPEG_BIN = ffmpegStatic;
+        FFMPEG_SOURCE = 'dependency';
+      }
+    }
+  } catch {}
+
+  try {
+    // eslint-disable-next-line global-require
+    if (!FFPROBE_BIN) {
+      const ffprobeInstaller = require('@ffprobe-installer/ffprobe');
+      if (ffprobeInstaller?.path) {
+        FFPROBE_BIN = ffprobeInstaller.path;
+        FFPROBE_SOURCE = 'dependency';
+      }
+    }
+  } catch {}
+}
 
 // 🎯 Performance principle:
 // - This app is a static-image publisher tool. We hard-lock 1fps globally.
@@ -103,6 +128,7 @@ const REASON_CODES = Object.freeze({
 });
 
 function ensureBundledBinaries() {
+  resolveBundledBinaries();
   if (!FFMPEG_BIN || !path.isAbsolute(FFMPEG_BIN)) {
     const e = new Error('Bundled ffmpeg is required but not available.');
     e.code = REASON_CODES.UNCAUGHT;
@@ -636,6 +662,7 @@ function extractFallbackReason(stderr) {
 }
 
 function createWindow() {
+  perfMark('createWindow.start');
   mainWindow = new BrowserWindow({
     width: 1100,
     height: 760,
@@ -646,6 +673,7 @@ function createWindow() {
     resizable: false,
     maximizable: false,
     backgroundColor: '#0c0f14',
+    show: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
@@ -654,11 +682,29 @@ function createWindow() {
     },
   });
 
+  perfMark('createWindow.end');
+  mainWindow.once('ready-to-show', () => {
+    perfMark('window.ready-to-show');
+    mainWindow.show();
+
+    // Warm up binary resolution after window is visible.
+    setTimeout(() => {
+      perfMark('binaryWarmup.start');
+      resolveBundledBinaries();
+      perfMark('binaryWarmup.end', {
+        ffmpegSource: FFMPEG_SOURCE || 'missing',
+        ffprobeSource: FFPROBE_SOURCE || 'missing',
+      });
+    }, 0);
+  });
+  mainWindow.webContents.once('did-finish-load', () => perfMark('loadURL.end'));
+  perfMark('loadURL.start', { url: 'index.html' });
   mainWindow.loadFile('index.html');
 }
 
 app.whenReady().then(() => {
   sessionLogger = createSessionLogger(app, { appFolderName: 'Album-to-Video', keepLatest: 20 });
+  perfMark('app.ready');
   sessionLogger.info('app.ready', {
     appVersion: app.getVersion(),
     electronVersion: process.versions.electron,
@@ -718,6 +764,12 @@ ipcMain.handle('ensure-dir', async (_event, dirPath) => {
 ipcMain.handle('open-folder', async (_event, folderPath) => {
   await shell.openPath(folderPath);
   return true;
+});
+
+ipcMain.on('perf-mark', (_event, payload) => {
+  const mark = String(payload?.mark || '').trim();
+  if (!mark) return;
+  perfMark(mark, { source: 'renderer' });
 });
 
 // ---------------- Metadata ----------------

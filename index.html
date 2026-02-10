@@ -347,6 +347,26 @@
 <div class="toastWrap" id="toastWrap"></div>
 
 <script>
+  function emitPerfMark(mark) {
+    try {
+      if (window.api && typeof window.api.perfMark === 'function') {
+        window.api.perfMark(mark);
+      }
+    } catch {}
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => emitPerfMark('renderer.domContentLoaded'), { once: true });
+  } else {
+    emitPerfMark('renderer.domContentLoaded');
+  }
+
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      emitPerfMark('firstPaint');
+    });
+  });
+
   const audioList = document.getElementById('audioList');
   const coverLabel = document.getElementById('coverLabel');
   const exportLabel = document.getElementById('exportLabel');
