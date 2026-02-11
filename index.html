@@ -17,23 +17,45 @@
     --total:#7fb8ff;
   }
   *{ box-sizing:border-box; }
+  html, body{
+    height:100%;
+    margin:0;
+  }
   body{
-    margin:0; padding:21px;
+    padding:21px;
     font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
     background: var(--bg);
     color: var(--text);
+    overflow:hidden;
   }
   .topbar{ display:flex; align-items:flex-start; justify-content:space-between; gap:13px; margin-bottom:21px; }
   .title{ font-size:20px; font-weight:900; letter-spacing:0.2px; }
   .subtitle{ font-size:13px; color:var(--muted); margin-top:6px; max-width:860px; line-height:1.35; }
   .topActions{ display:flex; gap:13px; align-items:center; flex-wrap:wrap; }
-  .grid{ display:grid; grid-template-columns: 1.6fr 1fr; gap:21px; }
+  .grid{
+    display:grid;
+    grid-template-columns: 1.6fr 1fr;
+    gap:21px;
+    flex:1 1 auto;
+    min-width:0;
+    min-height:0;
+  }
+  .grid > *{
+    min-width:0;
+    min-height:0;
+  }
+  .grid > .card:first-child{
+    display:flex;
+    flex-direction:column;
+    min-height:0;
+  }
   .card{
     background: linear-gradient(180deg, var(--panel), var(--panel2));
     border:1px solid var(--border);
     border-radius:14px;
     padding:21px;
     box-shadow: 0 14px 40px rgba(0,0,0,0.28);
+    min-width:0;
   }
   .card h3{
     margin:0 0 13px 0;
@@ -95,8 +117,10 @@
     margin:13px 0 0 0;
     padding:0;
     list-style:none;
-    max-height: 420px;
-    overflow:auto;
+    flex:1 1 auto;
+    min-height:0;
+    overflow-y:auto;
+    overflow-x:hidden;
     border:1px solid var(--border);
     border-radius:12px;
   }
@@ -139,6 +163,32 @@
   .inline{ display:flex; align-items:center; gap:13px; flex-wrap:wrap; margin-top:13px; }
   .inline label{ display:flex; align-items:center; gap:8px; color: var(--muted); font-size:13px; font-weight:850; }
   .inline input[type="checkbox"]{ transform: scale(1.05); }
+  #releaseFolderSection{
+    display:flex;
+    flex-direction:column;
+    gap:6px;
+    min-width:270px;
+  }
+  #releaseFolderSection.dimmed{
+    opacity:0.55;
+    filter:saturate(0.9);
+  }
+  #releaseFolderHelper{
+    min-height:18px;
+    color:var(--muted);
+    font-size:12px;
+    line-height:1.3;
+  }
+  #outputPreviewLine{
+    margin-top:8px;
+    min-height:18px;
+    color:var(--muted);
+    font-size:12px;
+    line-height:1.3;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+  }
 
   .coverPreviewRow{
     display:flex;
@@ -187,8 +237,8 @@
     padding-top:13px;
   }
   .progressTitle{ font-size:13px; color: var(--muted); margin-bottom:8px; }
-  .bar{ height:10px; background: rgba(255,255,255,0.09); border-radius:999px; overflow:hidden; }
-  .fill{ height:100%; width:0%; background: var(--accent); border-radius:999px; transition: width 0.12s linear; }
+  .bar{ height:8px; background: rgba(255,255,255,0.09); border-radius:999px; overflow:hidden; }
+  .fill{ height:100%; width:0%; background: var(--accent); border-radius:999px; transition: width 220ms cubic-bezier(0.22, 1, 0.36, 1); }
   .fill.total{ background: var(--total); opacity:0.9; }
 
   @keyframes indeterminateSlide {
@@ -203,7 +253,14 @@
 
   .statusLine{ margin-top:10px; font-size:13px; color: var(--muted); line-height:1.35; }
   .openRow{ margin-top:10px; display:none; }
-  .appShell{ position:relative; }
+  .appShell{
+    position:relative;
+    height:calc(100vh - 42px);
+    display:flex;
+    flex-direction:column;
+    min-height:0;
+    overflow:hidden;
+  }
   .locked .card{
     opacity:0.78;
     filter: saturate(0.92);
@@ -275,8 +332,12 @@
 
     <div class="inline">
       <label><input type="checkbox" id="createAlbumFolder" checked /> Create release folder</label>
-      <input type="text" id="albumName" placeholder="Release name" />
+      <div id="releaseFolderSection">
+        <input type="text" id="albumName" placeholder="Release name" />
+        <div id="releaseFolderHelper">Exports into folder: Album/</div>
+      </div>
     </div>
+    <div id="outputPreviewLine">Output preview: (choose export folder)/(first track).mp4</div>
 
     <div class="row">
       <button class="secondary" id="btnCover">Choose cover art</button>
@@ -311,7 +372,7 @@
       <div class="progressTitle" id="trackTitle">Current track: —</div>
       <div class="bar"><div class="fill" id="trackFill"></div></div>
 
-      <div class="progressTitle" style="margin-top:12px;">Total progress</div>
+      <div class="progressTitle" style="margin-top:12px;">Total progress <span id="overallPercent">0%</span></div>
       <div class="bar"><div class="fill total" id="totalFill"></div></div>
 
       <div class="openRow" id="openRow">
@@ -356,9 +417,13 @@
   const presetDescription = document.getElementById('presetDescription');
   const createAlbumFolderEl = document.getElementById('createAlbumFolder');
   const albumNameEl = document.getElementById('albumName');
+  const releaseFolderSection = document.getElementById('releaseFolderSection');
+  const releaseFolderHelper = document.getElementById('releaseFolderHelper');
+  const outputPreviewLine = document.getElementById('outputPreviewLine');
 
   const progressWrap = document.getElementById('progressWrap');
   const trackTitle = document.getElementById('trackTitle');
+  const overallPercent = document.getElementById('overallPercent');
   const statusLine = document.getElementById('statusLine');
   const trackFill = document.getElementById('trackFill');
   const totalFill = document.getElementById('totalFill');
@@ -383,7 +448,7 @@
   const btnOpenLogs = document.getElementById('btnOpenLogs');
   const coverPreview = document.querySelector('.coverPreview');
 
-  let tracks = []; // { path, displayName, outputBase, originalBase, trackNo, hasTrackNo }
+  let tracks = []; // { path, displayName, outputBase, originalBase, trackNo, hasTrackNo, durationSec }
   let trackPathSet = new Set();
   let nextTrackOrder = 1;
 
@@ -399,6 +464,11 @@
   let presetCatalog = [];
   let defaultPresetKey = 'album_ep';
   let statusResetTimer = null;
+  let overallDisplayedPercent = 0;
+  let overallPendingPercent = 0;
+  let overallFlushTimer = null;
+  let overallLastFlushAt = 0;
+  const OVERALL_PROGRESS_THROTTLE_MS = 100;
 
   const uiDisableList = [
     btnAddTracks,
@@ -418,6 +488,7 @@
     });
     renderBtn.disabled = !!locked;
     document.body.classList.toggle('locked', !!locked);
+    updateReleaseFolderSection();
   }
 
   function clearStatusResetTimer() {
@@ -434,6 +505,63 @@
         if (!isRendering) statusLine.textContent = 'Ready.';
       }, resetAfterMs);
     }
+  }
+
+  function clampPercent(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return 0;
+    return Math.max(0, Math.min(100, n));
+  }
+
+  function applyOverallProgress(percent) {
+    const safe = Math.max(overallDisplayedPercent, clampPercent(percent));
+    overallDisplayedPercent = safe;
+    overallPendingPercent = safe;
+    totalFill.style.width = `${safe.toFixed(3)}%`;
+    overallPercent.textContent = `${Math.round(safe)}%`;
+  }
+
+  function scheduleOverallProgress(percent, { force = false } = {}) {
+    const target = Math.max(overallDisplayedPercent, clampPercent(percent));
+    overallPendingPercent = Math.max(overallPendingPercent, target);
+
+    if (force) {
+      if (overallFlushTimer) {
+        clearTimeout(overallFlushTimer);
+        overallFlushTimer = null;
+      }
+      overallLastFlushAt = Date.now();
+      applyOverallProgress(overallPendingPercent);
+      return;
+    }
+
+    const now = Date.now();
+    const elapsed = now - overallLastFlushAt;
+    if (!overallFlushTimer && elapsed >= OVERALL_PROGRESS_THROTTLE_MS) {
+      overallLastFlushAt = now;
+      applyOverallProgress(overallPendingPercent);
+      return;
+    }
+    if (overallFlushTimer) return;
+
+    const waitMs = Math.max(0, OVERALL_PROGRESS_THROTTLE_MS - elapsed);
+    overallFlushTimer = setTimeout(() => {
+      overallFlushTimer = null;
+      overallLastFlushAt = Date.now();
+      applyOverallProgress(overallPendingPercent);
+    }, waitMs);
+  }
+
+  function resetOverallProgress() {
+    if (overallFlushTimer) {
+      clearTimeout(overallFlushTimer);
+      overallFlushTimer = null;
+    }
+    overallLastFlushAt = 0;
+    overallDisplayedPercent = 0;
+    overallPendingPercent = 0;
+    totalFill.style.width = '0%';
+    overallPercent.textContent = '0%';
   }
 
   function sanitizeFolderName(name) {
@@ -481,6 +609,37 @@
     const idx = noSlash.lastIndexOf('/');
     if (idx <= 0) return '';
     return noSlash.slice(0, idx);
+  }
+
+  function firstTrackPreviewBase() {
+    const first = tracks[0];
+    if (!first) return '(first track).mp4';
+    return `${buildOutputBaseForTrack(first)}.mp4`;
+  }
+
+  function updateOutputPreview() {
+    const baseFolder = exportFolder || '(choose export folder)';
+    const fileName = firstTrackPreviewBase();
+    if (createAlbumFolderEl.checked) {
+      const safeAlbum = sanitizeFolderName(albumNameEl.value);
+      outputPreviewLine.textContent = `Output preview: ${pathJoin(pathJoin(baseFolder, safeAlbum), fileName)}`;
+      return;
+    }
+    outputPreviewLine.textContent = `Output preview: ${pathJoin(baseFolder, fileName)}`;
+  }
+
+  function updateReleaseFolderSection() {
+    const createFolder = !!createAlbumFolderEl.checked;
+    albumNameEl.disabled = isRendering || !createFolder;
+
+    if (createFolder) {
+      releaseFolderSection.classList.remove('dimmed');
+      releaseFolderHelper.textContent = `Exports into folder: ${sanitizeFolderName(albumNameEl.value)}/`;
+    } else {
+      releaseFolderSection.classList.add('dimmed');
+      releaseFolderHelper.textContent = 'Exports MP4s directly into the export folder.';
+    }
+    updateOutputPreview();
   }
 
   function filePathToUrl(p) {
@@ -555,7 +714,7 @@
   function hideProgressUI({ preserveStatus = false } = {}) {
     progressWrap.style.display = 'none';
     trackFill.style.width = '0%';
-    totalFill.style.width = '0%';
+    resetOverallProgress();
     trackFill.classList.remove('indeterminate');
     trackTitle.textContent = 'Current track: —';
     if (!preserveStatus) setStatus('Ready.');
@@ -664,6 +823,7 @@
     });
 
     updateCounts();
+    updateOutputPreview();
   }
 
   function clearTracksOnly() {
@@ -686,6 +846,7 @@
     exportFolder = null;
     exportLabel.textContent = 'Not selected';
     lastFinalExportFolder = null;
+    updateOutputPreview();
   }
 
   function newAlbumReset() {
@@ -694,6 +855,7 @@
     clearCover();
     clearExportFolder();
     albumNameEl.value = '';
+    updateReleaseFolderSection();
     presetSelect.value = defaultPresetKey;
     sortTracksIfSafe();
     scheduleRenderTrackList();
@@ -784,6 +946,7 @@
           displayName: originalBase + ' (reading tags)',
           outputBase: originalBase,
           originalBase,
+          durationSec: Math.max(0, Number(probe?.durationSec) || 0),
           trackNo: null,
           hasTrackNo: false,
           inputOrder: nextTrackOrder++,
@@ -816,6 +979,7 @@
           t.hasTrackNo = hasTrackNo;
 
           if (!albumNameEl.value.trim() && album) albumNameEl.value = album;
+          updateReleaseFolderSection();
         } catch {
           t.displayName = sanitizeFileBaseName(t.originalBase);
           t.outputBase = sanitizeFileBaseName(t.originalBase);
@@ -851,6 +1015,7 @@
     if (!folder) return;
     exportFolder = folder;
     exportLabel.textContent = folder;
+    updateOutputPreview();
   }
 
   async function openOutputFolder() {
@@ -891,11 +1056,15 @@
       trackFill.classList.add('indeterminate');
     } else {
       trackFill.classList.remove('indeterminate');
-      const pct = Number(percentTrack);
+      const pct = clampPercent(percentTrack);
       const clamped = (!isFinal && pct >= 100) ? 99.5 : pct;
       trackFill.style.width = `${Number(clamped).toFixed(1)}%`;
     }
-    totalFill.style.width = `${Number(percentTotal).toFixed(1)}%`;
+    const rawTotal = clampPercent(percentTotal);
+    const pctTotalFinal = ((Number(trackIndex) + 1) / Math.max(1, Number(trackCount) || 1)) * 100;
+    const nextOverall = isFinal ? Math.max(rawTotal, pctTotalFinal) : rawTotal;
+    const force = isFinal || nextOverall >= 100;
+    scheduleOverallProgress(nextOverall, { force });
 
     const name = renderQueue?.[trackIndex]?.displayName || renderQueue?.[trackIndex]?.originalBase || '—';
     trackTitle.textContent = `Current track (${trackIndex + 1}/${trackCount}): ${name}`;
@@ -943,7 +1112,7 @@
 
     showProgressUI();
     trackFill.style.width = '0%';
-    totalFill.style.width = '0%';
+    resetOverallProgress();
     trackFill.classList.remove('indeterminate');
     openRow.style.display = 'none';
     logsRow.style.display = 'none';
@@ -992,6 +1161,7 @@
       }
 
       setStatus('Done.');
+      scheduleOverallProgress(100, { force: true });
       if (res?.debugLogPath) {
         const debugFolder = pathDirname(res.debugLogPath);
         if (debugFolder) lastLogFolder = debugFolder;
@@ -1024,6 +1194,8 @@
   btnOpenLogs.addEventListener('click', openLogsFolder);
   renderBtn.addEventListener('click', renderAll);
   cancelBtn.addEventListener('click', cancelRender);
+  createAlbumFolderEl.addEventListener('change', updateReleaseFolderSection);
+  albumNameEl.addEventListener('input', updateReleaseFolderSection);
   presetSelect.addEventListener('change', () => {
     updatePresetDescription();
     sortTracksIfSafe();
@@ -1032,6 +1204,7 @@
 
   renderTrackList();
   clearCover();
+  updateReleaseFolderSection();
   hideProgressUI();
   loadPresets();
 </script>
