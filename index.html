@@ -17,23 +17,45 @@
     --total:#7fb8ff;
   }
   *{ box-sizing:border-box; }
+  html, body{
+    height:100%;
+    margin:0;
+  }
   body{
-    margin:0; padding:21px;
+    padding:21px;
     font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
     background: var(--bg);
     color: var(--text);
+    overflow:hidden;
   }
   .topbar{ display:flex; align-items:flex-start; justify-content:space-between; gap:13px; margin-bottom:21px; }
   .title{ font-size:20px; font-weight:900; letter-spacing:0.2px; }
   .subtitle{ font-size:13px; color:var(--muted); margin-top:6px; max-width:860px; line-height:1.35; }
   .topActions{ display:flex; gap:13px; align-items:center; flex-wrap:wrap; }
-  .grid{ display:grid; grid-template-columns: 1.6fr 1fr; gap:21px; }
+  .grid{
+    display:grid;
+    grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+    gap:21px;
+    flex:1 1 auto;
+    min-width:0;
+    min-height:0;
+  }
+  .grid > *{
+    min-width:0;
+    min-height:0;
+  }
+  .grid > .card:first-child{
+    display:flex;
+    flex-direction:column;
+    min-height:0;
+  }
   .card{
     background: linear-gradient(180deg, var(--panel), var(--panel2));
     border:1px solid var(--border);
     border-radius:14px;
     padding:21px;
     box-shadow: 0 14px 40px rgba(0,0,0,0.28);
+    min-width:0;
   }
   .card h3{
     margin:0 0 13px 0;
@@ -95,10 +117,13 @@
     margin:13px 0 0 0;
     padding:0;
     list-style:none;
-    max-height: 420px;
-    overflow:auto;
+    flex:1 1 auto;
+    min-height:0;
+    overflow-y:auto;
+    overflow-x:hidden;
     border:1px solid var(--border);
     border-radius:12px;
+    scrollbar-gutter: stable both-edges;
   }
   .list li{
     display:grid;
@@ -139,6 +164,15 @@
   .inline{ display:flex; align-items:center; gap:13px; flex-wrap:wrap; margin-top:13px; }
   .inline label{ display:flex; align-items:center; gap:8px; color: var(--muted); font-size:13px; font-weight:850; }
   .inline input[type="checkbox"]{ transform: scale(1.05); }
+  #releaseFolderSection{
+    min-width:240px;
+  }
+  #releaseFolderSection.dimmed{
+    opacity:0.55;
+  }
+  #releaseFolderSection.dimmed input{
+    pointer-events:none;
+  }
 
   .coverPreviewRow{
     display:flex;
@@ -187,23 +221,21 @@
     padding-top:13px;
   }
   .progressTitle{ font-size:13px; color: var(--muted); margin-bottom:8px; }
-  .bar{ height:10px; background: rgba(255,255,255,0.09); border-radius:999px; overflow:hidden; }
-  .fill{ height:100%; width:0%; background: var(--accent); border-radius:999px; transition: width 0.12s linear; }
+  .bar{ height:8px; background: rgba(255,255,255,0.09); border-radius:999px; overflow:hidden; }
+  .fill{ height:100%; width:0%; background: var(--accent); border-radius:999px; transition: width 240ms cubic-bezier(0.22, 1, 0.36, 1); }
   .fill.total{ background: var(--total); opacity:0.9; }
-
-  @keyframes indeterminateSlide {
-    from { transform: translateX(-60%); }
-    to   { transform: translateX(220%); }
-  }
-  .indeterminate{
-    width:35% !important;
-    opacity:0.75;
-    animation: indeterminateSlide 0.85s infinite linear;
-  }
 
   .statusLine{ margin-top:10px; font-size:13px; color: var(--muted); line-height:1.35; }
   .openRow{ margin-top:10px; display:none; }
-  .appShell{ position:relative; }
+  .appShell{
+    position:relative;
+    height:100%;
+    display:flex;
+    flex-direction:column;
+    min-height:0;
+    min-width:0;
+    overflow:hidden;
+  }
   .locked .card{
     opacity:0.78;
     filter: saturate(0.92);
@@ -275,7 +307,9 @@
 
     <div class="inline">
       <label><input type="checkbox" id="createAlbumFolder" checked /> Create release folder</label>
-      <input type="text" id="albumName" placeholder="Release name" />
+      <div id="releaseFolderSection">
+        <input type="text" id="albumName" placeholder="Release name" />
+      </div>
     </div>
 
     <div class="row">
@@ -308,10 +342,8 @@
     <div class="statusLine" id="statusLine">Ready.</div>
 
     <div class="progressWrap" id="progressWrap">
-      <div class="progressTitle" id="trackTitle">Current track: —</div>
-      <div class="bar"><div class="fill" id="trackFill"></div></div>
-
-      <div class="progressTitle" style="margin-top:12px;">Total progress</div>
+      <div class="progressTitle" id="trackTitle">Track —</div>
+      <div class="progressTitle" style="margin-top:12px;">Total progress <span id="overallPercent">0%</span></div>
       <div class="bar"><div class="fill total" id="totalFill"></div></div>
 
       <div class="openRow" id="openRow">
@@ -356,11 +388,12 @@
   const presetDescription = document.getElementById('presetDescription');
   const createAlbumFolderEl = document.getElementById('createAlbumFolder');
   const albumNameEl = document.getElementById('albumName');
+  const releaseFolderSection = document.getElementById('releaseFolderSection');
 
   const progressWrap = document.getElementById('progressWrap');
   const trackTitle = document.getElementById('trackTitle');
+  const overallPercent = document.getElementById('overallPercent');
   const statusLine = document.getElementById('statusLine');
-  const trackFill = document.getElementById('trackFill');
   const totalFill = document.getElementById('totalFill');
 
   const renderBtn = document.getElementById('renderBtn');
@@ -383,7 +416,7 @@
   const btnOpenLogs = document.getElementById('btnOpenLogs');
   const coverPreview = document.querySelector('.coverPreview');
 
-  let tracks = []; // { path, displayName, outputBase, originalBase, trackNo, hasTrackNo }
+  let tracks = []; // { path, displayName, outputBase, originalBase, trackNo, hasTrackNo, durationSec }
   let trackPathSet = new Set();
   let nextTrackOrder = 1;
 
@@ -399,6 +432,11 @@
   let presetCatalog = [];
   let defaultPresetKey = 'album_ep';
   let statusResetTimer = null;
+  let overallDisplayedPercent = 0;
+  let overallPendingPercent = 0;
+  let overallFlushTimer = null;
+  let overallLastFlushAt = 0;
+  const OVERALL_PROGRESS_THROTTLE_MS = 120;
 
   const uiDisableList = [
     btnAddTracks,
@@ -408,7 +446,6 @@
     btnNewAlbum,
     presetSelect,
     createAlbumFolderEl,
-    albumNameEl,
   ];
 
   function setUiLocked(locked) {
@@ -418,6 +455,7 @@
     });
     renderBtn.disabled = !!locked;
     document.body.classList.toggle('locked', !!locked);
+    updateReleaseFolderState();
   }
 
   function clearStatusResetTimer() {
@@ -434,6 +472,69 @@
         if (!isRendering) statusLine.textContent = 'Ready.';
       }, resetAfterMs);
     }
+  }
+
+  function clampPercent(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return 0;
+    return Math.max(0, Math.min(100, n));
+  }
+
+  function applyOverallProgress(percent) {
+    const safe = Math.max(overallDisplayedPercent, clampPercent(percent));
+    overallDisplayedPercent = safe;
+    overallPendingPercent = safe;
+    totalFill.style.width = `${safe.toFixed(3)}%`;
+    overallPercent.textContent = `${Math.round(safe)}%`;
+  }
+
+  function scheduleOverallProgress(percent, { force = false } = {}) {
+    const target = Math.max(overallDisplayedPercent, clampPercent(percent));
+    overallPendingPercent = Math.max(overallPendingPercent, target);
+
+    if (force) {
+      if (overallFlushTimer) {
+        clearTimeout(overallFlushTimer);
+        overallFlushTimer = null;
+      }
+      overallLastFlushAt = Date.now();
+      applyOverallProgress(overallPendingPercent);
+      return;
+    }
+
+    const now = Date.now();
+    const elapsed = now - overallLastFlushAt;
+    if (!overallFlushTimer && elapsed >= OVERALL_PROGRESS_THROTTLE_MS) {
+      overallLastFlushAt = now;
+      applyOverallProgress(overallPendingPercent);
+      return;
+    }
+    if (overallFlushTimer) return;
+
+    const waitMs = Math.max(0, OVERALL_PROGRESS_THROTTLE_MS - elapsed);
+    overallFlushTimer = setTimeout(() => {
+      overallFlushTimer = null;
+      overallLastFlushAt = Date.now();
+      applyOverallProgress(overallPendingPercent);
+    }, waitMs);
+  }
+
+  function resetOverallProgress() {
+    if (overallFlushTimer) {
+      clearTimeout(overallFlushTimer);
+      overallFlushTimer = null;
+    }
+    overallLastFlushAt = 0;
+    overallDisplayedPercent = 0;
+    overallPendingPercent = 0;
+    totalFill.style.width = '0%';
+    overallPercent.textContent = '0%';
+  }
+
+  function updateReleaseFolderState() {
+    const createFolder = !!createAlbumFolderEl.checked;
+    albumNameEl.disabled = isRendering || !createFolder;
+    releaseFolderSection.classList.toggle('dimmed', !createFolder);
   }
 
   function sanitizeFolderName(name) {
@@ -501,6 +602,40 @@
     return String(x).padStart(2, '0');
   }
 
+  function durationSeconds(track) {
+    const sec = Number(track?.durationSec);
+    if (!Number.isFinite(sec) || sec <= 0) return 1;
+    return sec;
+  }
+
+  function durationWeightedOverallPercent({
+    trackIndex,
+    trackCount,
+    percentTrack,
+    percentTotal,
+    isFinal,
+  }) {
+    const count = Math.max(1, Number(trackCount) || renderQueue.length || 1);
+    const safeTrackIndex = Math.max(0, Math.min(count - 1, Number(trackIndex) || 0));
+    const queue = Array.isArray(renderQueue) ? renderQueue.slice(0, count) : [];
+
+    const durations = queue.map(durationSeconds);
+    while (durations.length < count) durations.push(1);
+
+    const totalDuration = durations.reduce((acc, value) => acc + value, 0);
+    if (!Number.isFinite(totalDuration) || totalDuration <= 0) {
+      return clampPercent(percentTotal);
+    }
+
+    let completedDuration = 0;
+    for (let i = 0; i < safeTrackIndex; i += 1) completedDuration += durations[i];
+
+    const currentTrackProgress = isFinal ? 1 : (clampPercent(percentTrack) / 100);
+    const currentDuration = durations[safeTrackIndex] * currentTrackProgress;
+    const weighted = ((completedDuration + currentDuration) / totalDuration) * 100;
+    return clampPercent(weighted);
+  }
+
   function updateCounts() { countLabel.textContent = String(tracks.length); }
 
   function showToast(message, type = 'info', ttlMs = 2400) {
@@ -554,10 +689,8 @@
   function showProgressUI() { progressWrap.style.display = 'block'; }
   function hideProgressUI({ preserveStatus = false } = {}) {
     progressWrap.style.display = 'none';
-    trackFill.style.width = '0%';
-    totalFill.style.width = '0%';
-    trackFill.classList.remove('indeterminate');
-    trackTitle.textContent = 'Current track: —';
+    resetOverallProgress();
+    trackTitle.textContent = 'Track —';
     if (!preserveStatus) setStatus('Ready.');
     openRow.style.display = 'none';
     logsRow.style.display = 'none';
@@ -784,6 +917,7 @@
           displayName: originalBase + ' (reading tags)',
           outputBase: originalBase,
           originalBase,
+          durationSec: Math.max(0, Number(probe?.durationSec) || 0),
           trackNo: null,
           hasTrackNo: false,
           inputOrder: nextTrackOrder++,
@@ -882,30 +1016,22 @@
     trackCount,
     percentTrack,
     percentTotal,
-    indeterminate,
     isFinal,
   }) => {
     if (!isRendering) return;
+    const safeTrackCount = Math.max(1, Number(trackCount) || renderQueue.length || 1);
+    const safeTrackIndex = Math.max(0, Math.min(safeTrackCount - 1, Number(trackIndex) || 0));
+    const weighted = durationWeightedOverallPercent({
+      trackIndex: safeTrackIndex,
+      trackCount: safeTrackCount,
+      percentTrack,
+      percentTotal,
+      isFinal,
+    });
+    scheduleOverallProgress(weighted, { force: !!isFinal || weighted >= 100 });
 
-    if (indeterminate) {
-      trackFill.classList.add('indeterminate');
-    } else {
-      trackFill.classList.remove('indeterminate');
-      const pct = Number(percentTrack);
-      const clamped = (!isFinal && pct >= 100) ? 99.5 : pct;
-      trackFill.style.width = `${Number(clamped).toFixed(1)}%`;
-    }
-    totalFill.style.width = `${Number(percentTotal).toFixed(1)}%`;
-
-    const name = renderQueue?.[trackIndex]?.displayName || renderQueue?.[trackIndex]?.originalBase || '—';
-    trackTitle.textContent = `Current track (${trackIndex + 1}/${trackCount}): ${name}`;
-
-    if (isFinal) {
-      trackFill.classList.remove('indeterminate');
-      trackFill.style.width = '100%';
-      const pctTotalFinal = ((trackIndex + 1) / Math.max(1, trackCount)) * 100;
-      totalFill.style.width = `${Number(pctTotalFinal).toFixed(1)}%`;
-    }
+    const name = renderQueue?.[safeTrackIndex]?.displayName || renderQueue?.[safeTrackIndex]?.originalBase || '—';
+    trackTitle.textContent = `Track ${safeTrackIndex + 1}/${safeTrackCount}: ${name}`;
   });
 
   window.api.onRenderStatus(({ phase }) => {
@@ -942,9 +1068,8 @@
     lastFinalExportFolder = finalExportFolder;
 
     showProgressUI();
-    trackFill.style.width = '0%';
-    totalFill.style.width = '0%';
-    trackFill.classList.remove('indeterminate');
+    resetOverallProgress();
+    trackTitle.textContent = `Track 1/${Math.max(1, toRender.length)}: —`;
     openRow.style.display = 'none';
     logsRow.style.display = 'none';
     lastLogFolder = null;
@@ -992,6 +1117,7 @@
       }
 
       setStatus('Done.');
+      scheduleOverallProgress(100, { force: true });
       if (res?.debugLogPath) {
         const debugFolder = pathDirname(res.debugLogPath);
         if (debugFolder) lastLogFolder = debugFolder;
@@ -1008,7 +1134,6 @@
       setUiLocked(false);
       renderBtn.textContent = 'Export';
       cancelBtn.disabled = true;
-      trackFill.classList.remove('indeterminate');
     }
   }
 
@@ -1024,6 +1149,7 @@
   btnOpenLogs.addEventListener('click', openLogsFolder);
   renderBtn.addEventListener('click', renderAll);
   cancelBtn.addEventListener('click', cancelRender);
+  createAlbumFolderEl.addEventListener('change', updateReleaseFolderState);
   presetSelect.addEventListener('change', () => {
     updatePresetDescription();
     sortTracksIfSafe();
@@ -1032,6 +1158,7 @@
 
   renderTrackList();
   clearCover();
+  updateReleaseFolderState();
   hideProgressUI();
   loadPresets();
 </script>
