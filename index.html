@@ -174,6 +174,7 @@
   .inline label{ display:flex; align-items:center; gap:8px; color: var(--muted); font-size:13px; font-weight:850; }
   .inline input[type="checkbox"]{ transform: scale(1.05); }
   #releaseFolderSection{
+    margin-left:6px;
     min-width:240px;
     min-height:42px;
     display:flex;
@@ -185,12 +186,20 @@
   #releaseFolderSection.dimmed input{
     pointer-events:none;
   }
+  #albumName{
+    width:220px;
+  }
+  #presetDescription{
+    max-width:380px;
+    margin-top:8px;
+    line-height:1.4;
+  }
 
   .coverPreviewRow{
     display:flex;
     align-items:center;
     gap:13px;
-    margin-top:13px;
+    margin-top:21px;
     padding:13px;
     border:1px solid rgba(255,255,255,0.08);
     border-radius:12px;
@@ -229,11 +238,11 @@
   .progressWrap{
     margin-top:auto;
     border-top:1px solid rgba(255,255,255,0.08);
-    padding-top:13px;
+    padding-top:21px;
   }
   .bar{
     position:relative;
-    height:10px;
+    height:14px;
     background: rgba(255,255,255,0.09);
     border-radius:999px;
     overflow:hidden;
@@ -243,7 +252,7 @@
     width:0%;
     background: var(--accent);
     border-radius:999px;
-    transition: width 450ms cubic-bezier(0.22, 1, 0.36, 1);
+    transition: width 600ms cubic-bezier(0.22, 1, 0.36, 1);
   }
   .fill.total{ background: var(--total); opacity:0.9; }
   .barPct{
@@ -335,14 +344,14 @@
       <label style="display:flex; flex-direction:column; gap:6px;">
         <span style="color:var(--muted); font-weight:850; font-size:12px;">Preset</span>
         <select id="presetSelect"></select>
-        <span id="presetDescription" style="color:var(--muted); font-size:12px; line-height:1.35; max-width:440px;"></span>
+        <span id="presetDescription" style="color:var(--muted); font-size:12px;"></span>
       </label>
     </div>
 
     <div class="inline">
       <label><input type="checkbox" id="createAlbumFolder" checked /> Create release folder</label>
       <div id="releaseFolderSection">
-        <input type="text" id="albumName" placeholder="Release name" />
+        <input type="text" id="albumName" placeholder="Name" />
       </div>
     </div>
 
