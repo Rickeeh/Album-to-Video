@@ -10,3 +10,10 @@ fixtures/out*
 *.log
 **/render-report*.json
 *.tar.gz
+
+# local artefacts
+album-to-video-app/
+index2.html
+index_BAK.html
+resources/bin/darwin-arm64/
+resources/bin/darwin-x64/
