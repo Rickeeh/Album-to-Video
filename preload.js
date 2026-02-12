@@ -32,6 +32,7 @@ contextBridge.exposeInMainWorld('api', {
   readMetadata: (filePath) => invokeWithDebug('read-metadata', filePath),
   probeAudio: (filePath) => invokeWithDebug('probe-audio', filePath),
   listPresets: () => invokeWithDebug('list-presets'),
+  dpiProbe: (payload) => invokeWithDebug('dpi-probe', payload),
   perfMark: (mark) => ipcRenderer.send('perf-mark', { mark }),
 
   renderAlbum: (payload) => invokeWithDebug('render-album', payload),

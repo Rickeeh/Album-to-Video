@@ -55,6 +55,11 @@
       "category": "public.app-category.music",
       "hardenedRuntime": true,
       "gatekeeperAssess": false,
+      "files": [
+        "!node_modules/@ffprobe-installer/**",
+        "!node_modules/ffmpeg-static/**",
+        "!node_modules/@ffmpeg-installer/**"
+      ],
       "entitlements": "build-resources/entitlements.mac.plist",
       "entitlementsInherit": "build-resources/entitlements.mac.inherit.plist",
       "x64ArchFiles": "Contents/Resources/bin/**",
@@ -74,6 +79,12 @@
       ]
     },
     "win": {
+      "extraResources": [
+        {
+          "from": "node_modules/@ffprobe-installer/win32-x64/ffprobe.exe",
+          "to": "bin/win32-x64/ffprobe.exe"
+        }
+      ],
       "target": [
         {
           "target": "nsis",

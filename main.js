@@ -11,6 +11,14 @@ const { getPreset, listPresets } = require('./src/main/presets');
 let mainWindow = null;
 let sessionLogger = null;
 
+if (process.platform === 'win32') {
+  try {
+    // Prevent DPI virtualization and force deterministic scaling.
+    app.commandLine.appendSwitch('high-dpi-support', '1');
+    app.commandLine.appendSwitch('force-device-scale-factor', '1');
+  } catch {}
+}
+
 const APP_START_NS = process.hrtime.bigint();
 function msSinceAppStart() {
   return Number((process.hrtime.bigint() - APP_START_NS) / 1000000n);
@@ -94,6 +102,18 @@ function resolveVendoredMacBinary(binaryName) {
   return candidates.find((candidate) => isReadableFile(candidate)) || null;
 }
 
+function resolveVendoredWinBinary(relPath) {
+  if (process.platform !== 'win32') return null;
+  const candidates = [];
+
+  if (process.resourcesPath && path.isAbsolute(process.resourcesPath)) {
+    candidates.push(path.join(process.resourcesPath, relPath));
+  }
+  candidates.push(path.join(__dirname, 'resources', relPath));
+
+  return candidates.find((candidate) => isReadableFile(candidate)) || null;
+}
+
 function resolveBundledBinaries() {
   if (binariesResolved) return;
   binariesResolved = true;
@@ -108,6 +128,14 @@ function resolveBundledBinaries() {
   if (vendoredFfprobe) {
     FFPROBE_BIN = vendoredFfprobe;
     FFPROBE_SOURCE = 'vendored';
+  }
+
+  if (process.platform === 'win32') {
+    const vendoredWinFfprobe = resolveVendoredWinBinary(path.join('bin', 'win32-x64', 'ffprobe.exe'));
+    if (vendoredWinFfprobe) {
+      FFPROBE_BIN = vendoredWinFfprobe;
+      FFPROBE_SOURCE = 'vendored';
+    }
   }
 
   try {
@@ -286,22 +314,48 @@ function createDebugLogger(exportFolder) {
 }
 
 function killProcessTree(proc) {
-  if (!proc || proc.killed) return;
+  if (!proc || proc.killed) return Promise.resolve();
 
-  try {
-    if (process.platform === 'win32') {
-      spawn('taskkill', ['/PID', String(proc.pid), '/T', '/F'], { windowsHide: true });
-      return;
+  return new Promise((resolve) => {
+    try {
+      if (process.platform === 'win32') {
+        const killer = spawn(
+          'taskkill',
+          ['/PID', String(proc.pid), '/T', '/F'],
+          { windowsHide: true },
+        );
+        let done = false;
+        const finish = () => {
+          if (done) return;
+          done = true;
+          setTimeout(resolve, 100);
+        };
+        killer.on('close', finish);
+        killer.on('error', finish);
+        setTimeout(() => {
+          if (!done && sessionLogger?.warn) {
+            sessionLogger.warn('process.kill.timeout', {
+              pid: proc?.pid,
+              platform: process.platform,
+            });
+          }
+          finish();
+        }, 2000);
+        return;
+      }
+
+      try { process.kill(-proc.pid, 'SIGTERM'); } catch {}
+      try { proc.kill('SIGTERM'); } catch {}
+
+      setTimeout(() => {
+        try { process.kill(-proc.pid, 'SIGKILL'); } catch {}
+        try { proc.kill('SIGKILL'); } catch {}
+        resolve();
+      }, 800);
+    } catch {
+      resolve();
     }
-
-    try { process.kill(-proc.pid, 'SIGTERM'); } catch {}
-    try { proc.kill('SIGTERM'); } catch {}
-
-    setTimeout(() => {
-      try { process.kill(-proc.pid, 'SIGKILL'); } catch {}
-      try { proc.kill('SIGKILL'); } catch {}
-    }, 800);
-  } catch {}
+  });
 }
 
 function runFfprobeJson(args, timeoutMs) {
@@ -719,6 +773,19 @@ function createWindow() {
       sandbox: true,
     },
   });
+  try {
+    const { screen } = require('electron');
+    const d = screen.getPrimaryDisplay?.();
+    sessionLogger?.info?.('dpi.main', {
+      primary: d ? {
+        scaleFactor: d.scaleFactor,
+        size: d.size,
+        workAreaSize: d.workAreaSize,
+        bounds: d.bounds,
+      } : null,
+      windowBounds: mainWindow.getBounds(),
+    });
+  } catch {}
 
   perfMark('createWindow.end');
   mainWindow.once('ready-to-show', () => {
@@ -734,6 +801,22 @@ function createWindow() {
         ffprobeSource: FFPROBE_SOURCE || 'missing',
       });
     }, 0);
+  });
+  mainWindow.webContents.on('did-finish-load', async () => {
+    try {
+      await mainWindow.webContents.setZoomFactor(1);
+      await mainWindow.webContents.setZoomLevel(0);
+      await mainWindow.webContents.setVisualZoomLevelLimits(1, 1);
+    } catch {}
+  });
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    const ctrlOrCmd = input.control || input.meta;
+    if (!ctrlOrCmd) return;
+
+    const key = String(input.key || '').toLowerCase();
+    if (key === '+' || key === '-' || key === '=' || key === '0') {
+      event.preventDefault();
+    }
   });
   mainWindow.webContents.once('did-finish-load', () => perfMark('loadURL.end'));
   perfMark('loadURL.start', { url: 'index.html' });
@@ -753,6 +836,26 @@ app.whenReady().then(() => {
         platform: process.platform,
         arch: process.arch,
       });
+      resolveBundledBinaries();
+      sessionLogger.info('engine.binaries', {
+        FFMPEG_SOURCE,
+        FFPROBE_SOURCE,
+        FFMPEG_BIN: Boolean(FFMPEG_BIN),
+        FFPROBE_BIN: Boolean(FFPROBE_BIN),
+      });
+      try {
+        const { screen } = require('electron');
+        const d = screen.getPrimaryDisplay?.();
+        sessionLogger.info('dpi.main', {
+          primary: d ? {
+            scaleFactor: d.scaleFactor,
+            size: d.size,
+            workAreaSize: d.workAreaSize,
+            bounds: d.bounds,
+          } : null,
+          windowBounds: mainWindow?.getBounds?.() || null,
+        });
+      } catch {}
     } catch (err) {
       console.error('[session_logger_init_failed]', String(err?.message || err));
     }
@@ -800,6 +903,11 @@ registerIpcHandler('select-folder', async () => {
 });
 
 registerIpcHandler('list-presets', async () => listPresets());
+
+registerIpcHandler('dpi-probe', async (_event, payload) => {
+  sessionLogger?.info?.('dpi.renderer', payload || {});
+  return true;
+});
 
 registerIpcHandler('ensure-dir', async (_event, dirPath) => {
   ensureDir(dirPath);
@@ -943,6 +1051,9 @@ function runFfmpegStillImage({
     });
 
     currentJob.ffmpeg = ff;
+    if (currentJob.cleanupContext) {
+      currentJob.cleanupContext.activeProcess = ff;
+    }
 
     const timeout = setTimeout(() => {
       killedByTimeout = true;
@@ -1111,7 +1222,8 @@ registerIpcHandler('render-album', async (event, payload) => {
     cleanedUp: false,
     cleanupStats: null,
     cleanupPromise: null,
-    getActiveProcess: () => currentJob.ffmpeg,
+    activeProcess: null,
+    getActiveProcess: () => currentJob.cleanupContext?.activeProcess || null,
     killProcessTree,
     killWaitTimeoutMs: 1500,
     currentTrackTmpPath: null,
@@ -1291,6 +1403,9 @@ registerIpcHandler('render-album', async (event, payload) => {
       currentJob.cleanupContext.tmpPaths.delete(tmpPath);
       currentJob.cleanupContext.currentTrackTmpPath = null;
       currentJob.cleanupContext.completedFinalOutputs.add(outputFinalPath);
+      if (currentJob.cleanupContext) {
+        currentJob.cleanupContext.activeProcess = null;
+      }
 
       rendered.push({ audioPath, outputPath: outputFinalPath });
     }

@@ -57,23 +57,24 @@ function defaultCleanupStats() {
 
 async function cleanupJob(jobId, reason, context) {
   if (!context) return defaultCleanupStats();
-  if (context.cleanupPromise) return context.cleanupPromise;
+  if (context.cleanupPromise) return await context.cleanupPromise;
   if (context.cleanedUp) return context.cleanupStats || defaultCleanupStats();
 
   context.cleanupPromise = (async () => {
-    context.cleanedUp = true;
-
     const logger = context.logger;
     const logData = { jobId, reason };
     if (logger?.info) logger.info('cleanup.start', logData);
     const stats = defaultCleanupStats();
 
-    const activeProcess = typeof context.getActiveProcess === 'function'
-      ? context.getActiveProcess()
-      : null;
+    const activeProcess =
+      (typeof context.getActiveProcess === 'function' ? context.getActiveProcess() : null)
+      || context.activeProcess
+      || null;
     if (activeProcess && !activeProcess.killed) {
       try {
-        context.killProcessTree(activeProcess);
+        if (typeof context.killProcessTree === 'function') {
+          await context.killProcessTree(activeProcess);
+        }
         const waitOutcome = await waitProcessExit(activeProcess, context.killWaitTimeoutMs || 1500);
         if (logger?.warn) logger.warn('cleanup.ffmpeg_killed', logData);
         if (logger?.info) logger.info('cleanup.ffmpeg_wait', { ...logData, waitOutcome });
@@ -83,6 +84,8 @@ async function cleanupJob(jobId, reason, context) {
         }
       }
     }
+
+    context.cleanedUp = true;
 
     const filesToDelete = new Set();
     if (context.stagingClosers instanceof Set) {
@@ -132,7 +135,7 @@ async function cleanupJob(jobId, reason, context) {
     return stats;
   })();
 
-  return context.cleanupPromise;
+  return await context.cleanupPromise;
 }
 
 module.exports = { cleanupJob };
