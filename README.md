@@ -14,6 +14,12 @@ npm i
 npm start
 ```
 
+## Release
+
+- Para fazer release, siga `docs/release-checklist.md`.
+- Windows requer bins vendorizados + `verify:win-bins`.
+- Logs por sessão em `%APPDATA%/.../logs/...` (ver `logger.ready`).
+
 ## Local build
 
 ```bash
