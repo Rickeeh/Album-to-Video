@@ -14,6 +14,12 @@ npm i
 npm start
 ```
 
+## Release
+
+- Para fazer release, siga `docs/release-checklist.md`.
+- Windows requer bins vendorizados + `verify:win-bins`.
+- Logs por sessão em `%APPDATA%/.../logs/...` (ver `logger.ready`).
+
 ## Merge PRs #1-#5 in order
 
 Use this script (requires GitHub CLI auth):
@@ -62,6 +68,26 @@ Universal macOS build notes:
 - Bootstrap is idempotent by default. Use `npm run bootstrap:mac-bins -- --force` to overwrite.
 - `npm run verify:mac-bins` checks all required binaries before `dist:mac`.
 - `build.mac.x64ArchFiles` is set for `Contents/Resources/bin/**` in universal merge.
+
+Windows build contract (deterministic / vendored):
+
+- Vendor binaries under `resources/bin/win32/ffmpeg.exe` and `resources/bin/win32/ffprobe.exe`.
+- `npm run dist:win` always runs `npm run verify:win-bins` first.
+- `verify:win-bins` enforces:
+  - file presence
+  - PE executable signature (`MZ`)
+  - pinned SHA256 for both binaries
+- Packaging fails fast if any check does not match.
+- After build, confirm the packaged paths:
+  - `dist/win-unpacked/resources/bin/win32/ffmpeg.exe`
+  - `dist/win-unpacked/resources/bin/win32/ffprobe.exe`
+
+Quick verification:
+
+```bash
+ls -lh dist/win-unpacked/resources/bin/win32/
+shasum -a 256 dist/win-unpacked/resources/bin/win32/ffmpeg.exe dist/win-unpacked/resources/bin/win32/ffprobe.exe
+```
 
 ## Artifacts
 
