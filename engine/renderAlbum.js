@@ -58,6 +58,8 @@ function buildArgs({ audioPath, imagePath, outputPath, audioMode }) {
     "yuv420p",
     "-shortest",
     ...audioArgs,
+    "-f",
+    "mp4",
     outputPath,
   ];
 }
@@ -69,34 +71,32 @@ function safeUnlink(p) {
 }
 
 async function renderOneTrack({ audioPath, imagePath, outputPath }) {
-  const tmpPath = String(outputPath).toLowerCase().endsWith(".mp4")
-    ? `${outputPath.slice(0, -4)}.tmp.mp4`
-    : `${outputPath}.tmp.mp4`;
-  safeUnlink(tmpPath);
+  const partialPath = `${outputPath}.partial`;
+  safeUnlink(partialPath);
 
   try {
     await run(ffmpegPath, buildArgs({
       audioPath,
       imagePath,
-      outputPath: tmpPath,
+      outputPath: partialPath,
       audioMode: "copy",
     }));
   } catch (err) {
     if (!isAudioCopyCompatibilityError(err?.stderr)) throw err;
-    safeUnlink(tmpPath);
+    safeUnlink(partialPath);
     await run(ffmpegPath, buildArgs({
       audioPath,
       imagePath,
-      outputPath: tmpPath,
+      outputPath: partialPath,
       audioMode: "aac",
     }));
   }
 
-  const stat = fs.statSync(tmpPath);
+  const stat = fs.statSync(partialPath);
   if (!stat.isFile() || stat.size <= 0) {
-    throw new Error(`Invalid temporary output: ${tmpPath}`);
+    throw new Error(`Invalid temporary output: ${partialPath}`);
   }
-  fs.renameSync(tmpPath, outputPath);
+  fs.renameSync(partialPath, outputPath);
 }
 
 module.exports = { renderOneTrack };

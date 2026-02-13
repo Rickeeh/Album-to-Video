@@ -72,12 +72,44 @@ function runProgressTruthPolicyTest() {
   const idxFinalizingStatus = source.indexOf("event.sender.send('render-status', { phase: 'finalizing' });");
   const idxFinalizingProgress = source.indexOf("event.sender.send('render-progress', {\n      trackIndex: Math.max(0, tracks.length - 1),");
   const idxSuccessStatus = source.indexOf("event.sender.send('render-status', { phase: 'success' });");
+  const idxFinalizeStart = source.indexOf("emitFinalizeStep(jobId, 'finalize.start'");
+  const idxFinalizeRenameStart = source.indexOf("emitFinalizeStep(jobId, 'finalize.rename_outputs.start'");
+  const idxFinalizeRenameEnd = source.indexOf("emitFinalizeStep(jobId, 'finalize.rename_outputs.end'");
+  const idxFinalizeReportStart = source.indexOf("emitFinalizeStep(jobId, 'finalize.write_report.start'");
+  const idxFinalizeReportEnd = source.indexOf("emitFinalizeStep(jobId, 'finalize.write_report.end'");
+  const idxFinalizeCleanupStart = source.indexOf("emitFinalizeStep(jobId, 'finalize.cleanup.start'");
+  const idxFinalizeCleanupEnd = source.indexOf("emitFinalizeStep(jobId, 'finalize.cleanup.end'");
+  const idxFinalizeEnd = source.indexOf("emitFinalizeStep(jobId, 'finalize.end'");
+  const idxRenderSuccessLog = source.indexOf("sessionLogger?.info('render.success'");
   assertOk(idxFinalizingStatus >= 0, 'Progress truth: missing finalizing status emission.');
   assertOk(idxFinalizingProgress >= 0, 'Progress truth: missing finalizing progress emission.');
   assertOk(idxSuccessStatus >= 0, 'Progress truth: missing success status emission.');
   assertOk(
     idxFinalizingStatus < idxFinalizingProgress && idxFinalizingProgress < idxSuccessStatus,
     'Progress truth: expected order finalizing status -> finalizing progress -> success status.'
+  );
+  [
+    idxFinalizeStart,
+    idxFinalizeRenameStart,
+    idxFinalizeRenameEnd,
+    idxFinalizeReportStart,
+    idxFinalizeReportEnd,
+    idxFinalizeCleanupStart,
+    idxFinalizeCleanupEnd,
+    idxFinalizeEnd,
+    idxRenderSuccessLog,
+  ].forEach((idx) => assertOk(idx >= 0, 'Progress truth: missing finalize structured marks or render.success log.'));
+  assertOk(
+    idxFinalizeStart < idxFinalizeRenameStart
+    && idxFinalizeRenameStart < idxFinalizeRenameEnd
+    && idxFinalizeRenameEnd < idxFinalizeReportStart
+    && idxFinalizeReportStart < idxFinalizeReportEnd
+    && idxFinalizeReportEnd < idxFinalizeCleanupStart
+    && idxFinalizeCleanupStart < idxFinalizeCleanupEnd
+    && idxFinalizeCleanupEnd < idxFinalizeEnd
+    && idxFinalizeEnd < idxRenderSuccessLog
+    && idxRenderSuccessLog < idxSuccessStatus,
+    'Progress truth: expected finalize.* sequence before render.success and success status.'
   );
 
   // Guard 4: explicit "100" is only triggered by success handler.
@@ -110,13 +142,13 @@ async function runCancelFinalizingCleanupTest() {
     path.join(outputFolder, '02. InProgress.mp4'),
     path.join(outputFolder, '03. Planned.mp4'),
   ];
-  const currentTrackTmpPath = `${plannedFinalOutputs[1]}.tmp.mp4`;
+  const currentTrackPartialPath = `${plannedFinalOutputs[1]}.partial`;
   const reportPath = path.join(logsFolder, 'render-report.json');
 
   // Simulate "cancel at finalizing": completed + in-progress + report present.
   fs.writeFileSync(plannedFinalOutputs[0], 'completed');
   fs.writeFileSync(plannedFinalOutputs[1], 'partial');
-  fs.writeFileSync(currentTrackTmpPath, 'tmp');
+  fs.writeFileSync(currentTrackPartialPath, 'tmp');
   fs.writeFileSync(reportPath, '{}');
 
   const ctx = {
@@ -126,8 +158,10 @@ async function runCancelFinalizingCleanupTest() {
     getActiveProcess: () => null,
     killProcessTree: () => {},
     killWaitTimeoutMs: 300,
-    currentTrackTmpPath,
-    tmpPaths: new Set([currentTrackTmpPath]),
+    currentTrackPartialPath,
+    partialPaths: new Set([currentTrackPartialPath]),
+    currentTrackTmpPath: currentTrackPartialPath,
+    tmpPaths: new Set([currentTrackPartialPath]),
     plannedFinalOutputs: new Set(plannedFinalOutputs),
     completedFinalOutputs: new Set([plannedFinalOutputs[0]]),
     stagingPaths: new Set(),
@@ -155,7 +189,7 @@ async function runCancelFinalizingCleanupTest() {
   assertOk(!fs.existsSync(plannedFinalOutputs[0]), 'Cancel finalizing: expected completed output removed.');
   assertOk(!fs.existsSync(plannedFinalOutputs[1]), 'Cancel finalizing: expected in-progress output removed.');
   assertOk(!fs.existsSync(plannedFinalOutputs[2]), 'Cancel finalizing: expected planned output absent.');
-  assertOk(!fs.existsSync(currentTrackTmpPath), 'Cancel finalizing: expected temp output removed.');
+  assertOk(!fs.existsSync(currentTrackPartialPath), 'Cancel finalizing: expected partial output removed.');
   assertOk(!fs.existsSync(reportPath), 'Cancel finalizing: expected render report removed.');
   assertOk(!fs.existsSync(outputFolder), 'Cancel finalizing: expected release folder removed.');
 

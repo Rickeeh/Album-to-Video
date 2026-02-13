@@ -38,13 +38,13 @@ async function runCancelBatchCleanupScenario() {
     path.join(outputFolder, "02. InProgress.mp4"),
     path.join(outputFolder, "03. Planned.mp4"),
   ];
-  const currentTrackTmpPath = `${plannedFinalOutputs[1]}.tmp.mp4`;
+  const currentTrackPartialPath = `${plannedFinalOutputs[1]}.partial`;
   const reportPath = path.join(logsFolder, "render-report.json");
 
   // Simulate: track 1 done, track 2 in-progress, then cancel.
   fs.writeFileSync(plannedFinalOutputs[0], "completed");
   fs.writeFileSync(plannedFinalOutputs[1], "partial");
-  fs.writeFileSync(currentTrackTmpPath, "tmp");
+  fs.writeFileSync(currentTrackPartialPath, "tmp");
   fs.writeFileSync(reportPath, "{}");
 
   const ctx = {
@@ -54,8 +54,10 @@ async function runCancelBatchCleanupScenario() {
     getActiveProcess: () => null,
     killProcessTree: () => {},
     killWaitTimeoutMs: 300,
-    currentTrackTmpPath,
-    tmpPaths: new Set([currentTrackTmpPath]),
+    currentTrackPartialPath,
+    partialPaths: new Set([currentTrackPartialPath]),
+    currentTrackTmpPath: currentTrackPartialPath,
+    tmpPaths: new Set([currentTrackPartialPath]),
     plannedFinalOutputs: new Set(plannedFinalOutputs),
     completedFinalOutputs: new Set([plannedFinalOutputs[0]]),
     stagingPaths: new Set(),
@@ -71,7 +73,7 @@ async function runCancelBatchCleanupScenario() {
   assertOk(!fs.existsSync(plannedFinalOutputs[0]), "Expected completed output to be deleted on CANCELLED.");
   assertOk(!fs.existsSync(plannedFinalOutputs[1]), "Expected in-progress output to be deleted on CANCELLED.");
   assertOk(!fs.existsSync(plannedFinalOutputs[2]), "Expected planned output to be absent on CANCELLED.");
-  assertOk(!fs.existsSync(currentTrackTmpPath), "Expected temporary output to be deleted on CANCELLED.");
+  assertOk(!fs.existsSync(currentTrackPartialPath), "Expected partial output to be deleted on CANCELLED.");
   assertOk(!fs.existsSync(reportPath), "Expected render-report.json to not exist in export folder on CANCELLED.");
   assertOk(!fs.existsSync(outputFolder), "Expected release folder to be removed on CANCELLED.");
 
@@ -101,6 +103,11 @@ async function runCancelBatchCleanupScenario() {
         console.error("Output video not created:", output);
         process.exit(1);
       }
+      const partialOutput = `${output}.partial`;
+      if (fs.existsSync(partialOutput)) {
+        console.error("Partial output should not remain after success:", partialOutput);
+        process.exit(1);
+      }
 
       const probe = spawnSync(
         ffprobePath,
@@ -121,6 +128,12 @@ async function runCancelBatchCleanupScenario() {
       console.log(`OK: ${audio} + ${image}`);
     }
   }
+
+  const danglingPartials = fs.readdirSync(outDir).filter((name) => name.endsWith(".partial"));
+  assertOk(
+    danglingPartials.length === 0,
+    `Expected no .partial artifacts after success run (found ${danglingPartials.length}).`
+  );
 
   await runCancelBatchCleanupScenario();
 

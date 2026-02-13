@@ -503,11 +503,9 @@ function killProcessTree(proc) {
         return;
       }
 
-      try { process.kill(-proc.pid, 'SIGTERM'); } catch {}
       try { proc.kill('SIGTERM'); } catch {}
 
       setTimeout(() => {
-        try { process.kill(-proc.pid, 'SIGKILL'); } catch {}
         try { proc.kill('SIGKILL'); } catch {}
         resolve();
       }, 800);
@@ -840,7 +838,7 @@ async function buildRenderPlan(payload) {
       prefixTrackNumber,
     );
     const outputFinalPath = uniquePlannedOutputPath(resolvedExportFolder, outputBase, '.mp4', reservedOutputs);
-    const tmpPath = buildTmpPath(outputFinalPath);
+    const partialPath = buildPartialPath(outputFinalPath);
     const probe = await probeAudioInfo(t.audioPath, 5000);
     const durationSec = Number(probe?.durationSec || 0);
     if (!probe?.ok || !Number.isFinite(durationSec) || durationSec <= 0) {
@@ -855,7 +853,7 @@ async function buildRenderPlan(payload) {
       durationSec,
       outputBase,
       outputFinalPath,
-      tmpPath,
+      partialPath,
       ffmpegArgsBase: buildFfmpegArgsBase({
         imagePath,
         audioPath: t.audioPath,
@@ -877,29 +875,43 @@ async function buildRenderPlan(payload) {
   };
 }
 
-function buildTmpPath(finalPath) {
-  if (String(finalPath).toLowerCase().endsWith('.mp4')) {
-    return `${finalPath.slice(0, -4)}.tmp.mp4`;
-  }
-  return `${finalPath}.tmp.mp4`;
+function buildPartialPath(finalPath) {
+  return `${String(finalPath || '')}.partial`;
 }
 
-function isTmpMp4Path(filePath) {
-  return String(filePath || '').toLowerCase().endsWith('.tmp.mp4');
+function isPartialPath(filePath) {
+  return String(filePath || '').toLowerCase().endsWith('.partial');
 }
 
-function validateTmpOutput(tmpPath) {
-  if (!isTmpMp4Path(tmpPath)) {
-    const e = new Error(`Temporary output path invalid: ${tmpPath}`);
+function validatePartialOutput(partialPath) {
+  if (!isPartialPath(partialPath)) {
+    const e = new Error(`Partial output path invalid: ${partialPath}`);
     e.code = REASON_CODES.UNCAUGHT;
     throw e;
   }
-  const stat = fs.statSync(tmpPath);
+  const stat = fs.statSync(partialPath);
   if (!stat.isFile() || stat.size <= 0) {
-    const e = new Error(`Temporary output invalid: ${tmpPath}`);
+    const e = new Error(`Partial output invalid: ${partialPath}`);
     e.code = REASON_CODES.FFMPEG_EXIT_NONZERO;
     throw e;
   }
+}
+
+function listPartialOutputs(outputFolder) {
+  if (!outputFolder || !fs.existsSync(outputFolder)) return [];
+  try {
+    return fs.readdirSync(outputFolder)
+      .filter((name) => String(name || '').toLowerCase().endsWith('.partial'))
+      .map((name) => path.join(outputFolder, name));
+  } catch {
+    return [];
+  }
+}
+
+function emitFinalizeStep(jobId, step, extra = {}) {
+  const payload = { jobId, ...extra };
+  sessionLogger?.info?.(step, payload);
+  perfMark(step, payload);
 }
 
 function firstLine(text) {
@@ -1189,6 +1201,10 @@ registerIpcHandler('ensure-dir', async (_event, payload) => {
 
 registerIpcHandler('open-folder', async (_event, folderPath) => {
   const safeFolder = resolveExistingDirectoryPath(folderPath, 'Folder');
+  const pendingPartials = listPartialOutputs(safeFolder);
+  if (pendingPartials.length > 0) {
+    throw new Error('Cannot open folder while partial outputs exist.');
+  }
   const err = await shell.openPath(safeFolder);
   if (err) throw new Error(`Failed to open folder: ${err}`);
   return true;
@@ -1296,9 +1312,6 @@ function runFfmpegStillImage({
   timeoutMs,
   debugLog,
   durationSec,
-  totalDurationSec,
-  elapsedBeforeSec,
-  totalDurationKnown,
   jobTotalMs,
   jobDoneMsBeforeTrack,
   getHasRealSignal,
@@ -1311,8 +1324,8 @@ function runFfmpegStillImage({
   const baseArgs = Array.isArray(ffmpegArgsBase) ? ffmpegArgsBase.slice() : [];
 
   return new Promise(async (resolve, reject) => {
-    if (!isTmpMp4Path(outputPath)) {
-      const e = new Error(`Render output must use .tmp.mp4 staging path: ${outputPath}`);
+    if (!isPartialPath(outputPath)) {
+      const e = new Error(`Render output must use .partial staging path: ${outputPath}`);
       e.code = REASON_CODES.UNCAUGHT;
       reject(e);
       return;
@@ -1394,6 +1407,7 @@ function runFfmpegStillImage({
       // 7) Robust progress
       '-progress', 'pipe:1',
       '-nostats',
+      '-f', 'mp4',
 
       outputPath,
     ];
@@ -1412,7 +1426,7 @@ function runFfmpegStillImage({
 
     const ff = spawn(FFMPEG_BIN, args, {
       windowsHide: true,
-      detached: process.platform !== 'win32',
+      detached: false,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 
@@ -1569,6 +1583,7 @@ registerIpcHandler('render-album', async (event, payload) => {
 
   const jobId = plan.jobId;
   const exportFolder = plan.exportFolder;
+  const selectedExportFolder = resolveExistingDirectoryPath(lastSelectedExportFolder, 'Selected export folder');
   currentJob.cancelled = false;
   currentJob.cancelReason = null;
   currentJob.active = true;
@@ -1581,7 +1596,9 @@ registerIpcHandler('render-album', async (event, payload) => {
     getActiveProcess: () => currentJob.cleanupContext?.activeProcess || null,
     killProcessTree,
     killWaitTimeoutMs: 1500,
+    currentTrackPartialPath: null,
     currentTrackTmpPath: null,
+    partialPaths: new Set(),
     tmpPaths: new Set(),
     plannedFinalOutputs: new Set(plan.tracks.map((t) => t.outputFinalPath)),
     completedFinalOutputs: new Set(),
@@ -1686,21 +1703,22 @@ registerIpcHandler('render-album', async (event, payload) => {
       const trackPlan = tracks[i];
       const audioPath = trackPlan.audioPath;
       const outputFinalPath = trackPlan.outputFinalPath;
-      const tmpPath = trackPlan.tmpPath;
-      if (!isTmpMp4Path(tmpPath)) {
-        const e = new Error(`Temporary output path invalid: ${tmpPath}`);
+      const partialPath = trackPlan.partialPath;
+      if (!isPartialPath(partialPath)) {
+        const e = new Error(`Partial output path invalid: ${partialPath}`);
         e.code = REASON_CODES.UNCAUGHT;
         throw e;
       }
-      safeUnlink(tmpPath);
-      currentJob.cleanupContext.currentTrackTmpPath = tmpPath;
-      currentJob.cleanupContext.tmpPaths.add(tmpPath);
-      const elapsedBeforeSec = tracks.slice(0, i).reduce((a, t) => a + (t.durationSec || 0), 0);
+      safeUnlink(partialPath);
+      currentJob.cleanupContext.currentTrackPartialPath = partialPath;
+      currentJob.cleanupContext.currentTrackTmpPath = partialPath;
+      currentJob.cleanupContext.partialPaths.add(partialPath);
+      currentJob.cleanupContext.tmpPaths.add(partialPath);
       const trackReport = {
         inputPath: audioPath,
         durationSec: trackPlan.durationSec || 0,
         outputFinalPath,
-        tmpPath,
+        partialPath,
         ffmpegArgsBase: trackPlan.ffmpegArgsBase,
         ffmpegArgs: [],
         startTs: null,
@@ -1721,7 +1739,7 @@ registerIpcHandler('render-album', async (event, payload) => {
         runResult = await runFfmpegStillImage({
           event,
           audioPath,
-          outputPath: tmpPath,
+          outputPath: partialPath,
           progressOutputPath: outputFinalPath,
           ffmpegArgsBase: trackPlan.ffmpegArgsBase,
           logLevel: 'error',
@@ -1730,9 +1748,6 @@ registerIpcHandler('render-album', async (event, payload) => {
           timeoutMs: timeoutPerTrackMs || 30 * 60 * 1000,
           debugLog: debugLogger?.log,
           durationSec: trackPlan.durationSec,
-          totalDurationSec,
-          elapsedBeforeSec,
-          totalDurationKnown,
           jobTotalMs,
           jobDoneMsBeforeTrack: jobDoneMs,
           getHasRealSignal: getJobHasRealSignal,
@@ -1751,12 +1766,12 @@ registerIpcHandler('render-album', async (event, payload) => {
         fallbackReason = extractFallbackReason(err?.stderr || err?.stderrTail);
         sessionLogger?.warn('render.audio_copy_fallback', { jobId, trackIndex: i, fallbackReason });
         if (debugLogger) debugLogger.log(`[fallback] track=${i + 1} reason=${fallbackReason}`);
-        safeUnlink(tmpPath);
+        safeUnlink(partialPath);
 
         runResult = await runFfmpegStillImage({
           event,
           audioPath,
-          outputPath: tmpPath,
+          outputPath: partialPath,
           progressOutputPath: outputFinalPath,
           ffmpegArgsBase: buildFfmpegArgsBase({
             imagePath: plan.imagePath,
@@ -1770,9 +1785,6 @@ registerIpcHandler('render-album', async (event, payload) => {
           timeoutMs: timeoutPerTrackMs || 30 * 60 * 1000,
           debugLog: debugLogger?.log,
           durationSec: trackPlan.durationSec,
-          totalDurationSec,
-          elapsedBeforeSec,
-          totalDurationKnown,
           jobTotalMs,
           jobDoneMsBeforeTrack: jobDoneMs,
           getHasRealSignal: getJobHasRealSignal,
@@ -1792,16 +1804,12 @@ registerIpcHandler('render-album', async (event, payload) => {
       trackReport.stderrTail = runResult.stderrTail;
       jobDoneMs = Math.max(jobDoneMs, Math.floor(Number(runResult?.jobDoneMs || 0)));
 
-      validateTmpOutput(tmpPath);
-      fs.renameSync(tmpPath, outputFinalPath);
-      currentJob.cleanupContext.tmpPaths.delete(tmpPath);
+      validatePartialOutput(partialPath);
+      currentJob.cleanupContext.currentTrackPartialPath = null;
       currentJob.cleanupContext.currentTrackTmpPath = null;
-      currentJob.cleanupContext.completedFinalOutputs.add(outputFinalPath);
       if (currentJob.cleanupContext) {
         currentJob.cleanupContext.activeProcess = null;
       }
-
-      rendered.push({ audioPath, outputPath: outputFinalPath });
     }
 
     event.sender.send('render-status', { phase: 'finalizing' });
@@ -1822,12 +1830,51 @@ registerIpcHandler('render-album', async (event, payload) => {
       isFinal: true,
     });
 
+    emitFinalizeStep(jobId, 'finalize.start', { exportFolder, trackCount: tracks.length });
+
+    emitFinalizeStep(jobId, 'finalize.rename_outputs.start', { pendingCount: tracks.length });
+    let renamedCount = 0;
+    for (const trackPlan of tracks) {
+      const partialPath = trackPlan.partialPath;
+      const outputFinalPath = trackPlan.outputFinalPath;
+      assertPathWithinBase(selectedExportFolder, partialPath, 'Partial output');
+      assertPathWithinBase(selectedExportFolder, outputFinalPath, 'Final output');
+      validatePartialOutput(partialPath);
+      fs.renameSync(partialPath, outputFinalPath);
+      currentJob.cleanupContext.partialPaths.delete(partialPath);
+      currentJob.cleanupContext.tmpPaths.delete(partialPath);
+      currentJob.cleanupContext.completedFinalOutputs.add(outputFinalPath);
+      rendered.push({ audioPath: trackPlan.audioPath, outputPath: outputFinalPath });
+      renamedCount += 1;
+    }
+    emitFinalizeStep(jobId, 'finalize.rename_outputs.end', { renamedCount });
+
+    emitFinalizeStep(jobId, 'finalize.write_report.start');
+
     report.job.status = 'SUCCESS';
     report.job.reasonCode = '';
     report.job.humanMessage = 'Render completed successfully.';
     report.job.endTs = new Date().toISOString();
     report.job.durationMs = Date.now() - jobStartedAtMs;
     reportPath = writeRenderReport(exportFolder, report);
+    emitFinalizeStep(jobId, 'finalize.write_report.end', { reportPath });
+
+    emitFinalizeStep(jobId, 'finalize.cleanup.start');
+    const danglingPartials = listPartialOutputs(exportFolder);
+    danglingPartials.forEach((partialPath) => {
+      safeUnlink(partialPath);
+      currentJob.cleanupContext.partialPaths.delete(partialPath);
+      currentJob.cleanupContext.tmpPaths.delete(partialPath);
+    });
+    const partialsRemaining = listPartialOutputs(exportFolder);
+    if (partialsRemaining.length > 0) {
+      const e = new Error(`Finalize cleanup left partial outputs: ${partialsRemaining.length}`);
+      e.code = REASON_CODES.UNCAUGHT;
+      throw e;
+    }
+    emitFinalizeStep(jobId, 'finalize.cleanup.end', { removedPartialCount: danglingPartials.length });
+    emitFinalizeStep(jobId, 'finalize.end', { renderedCount: rendered.length, reportPath });
+
     sessionLogger?.info('render.success', { jobId, renderedCount: rendered.length, reportPath });
     event.sender.send('render-status', { phase: 'success' });
 
