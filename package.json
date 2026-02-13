@@ -1,15 +1,26 @@
 {
   "name": "album-to-video-app",
   "version": "1.0.0",
+  "author": "Ricky",
   "description": "Convert audio albums into videos",
   "main": "main.js",
   "type": "commonjs",
   "scripts": {
     "start": "electron .",
     "build": "electron-builder --dir",
-    "dist": "electron-builder",
+    "dist": "electron-builder --publish never",
+    "bootstrap:mac-bins": "node scripts/bootstrap-mac-binaries.js",
+    "verify:mac-bins": "node scripts/verify-mac-binaries.js",
+    "dist:mac": "npm run verify:mac-bins && electron-builder --mac dmg zip --universal --publish never",
+    "dist:win": "npm run verify:win-bins && electron-builder --win nsis portable --x64 --publish never",
+    "release:win": "npm run dist:win && npm run release:hash",
     "test:smoke": "node scripts/smoke-test.js",
-    "test:e2e": "node scripts/e2e-render-test.js"
+    "test:e2e": "node tests/e2e/render.test.js && node tests/e2e/hardening.test.js && node tests/e2e/diagnostics.test.js",
+    "test": "npm run test:smoke && npm run test:e2e",
+    "verify:win-bins": "node scripts/verify-win-binaries.js",
+    "verify:invariants": "node scripts/verify-invariants.js",
+    "verify:all": "npm run test && npm run verify:win-bins && npm run verify:invariants",
+    "release:hash": "node scripts/release-sha256.js"
   },
   "devDependencies": {
     "electron": "^40.0.0",
@@ -23,18 +34,75 @@
   "build": {
     "appId": "com.albumtovideo.app",
     "productName": "Album to Video",
+    "asar": true,
+    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
+    "directories": {
+      "buildResources": "build-resources",
+      "output": "dist"
+    },
     "files": [
       "main.js",
       "preload.js",
       "index.html",
       "src/**/*",
-      "node_modules/**/*"
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/bin",
+        "to": "bin",
+        "filter": [
+          "**/*"
+        ]
+      }
     ],
     "mac": {
-      "target": ["dir"]
+      "category": "public.app-category.music",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "files": [
+        "!node_modules/@ffprobe-installer/**",
+        "!node_modules/ffmpeg-static/**",
+        "!node_modules/@ffmpeg-installer/**"
+      ],
+      "entitlements": "build-resources/entitlements.mac.plist",
+      "entitlementsInherit": "build-resources/entitlements.mac.inherit.plist",
+      "x64ArchFiles": "Contents/Resources/bin/**",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "universal"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "universal"
+          ]
+        }
+      ]
     },
     "win": {
-      "target": ["dir"]
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowElevation": true,
+      "allowToChangeInstallationDirectory": true
     }
   }
 }

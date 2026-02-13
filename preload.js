@@ -1,30 +1,50 @@
 // preload.js
 const { contextBridge, ipcRenderer } = require('electron');
-const { pathToFileURL } = require('url');
-const path = require('path');
+
+function payloadKeys(payload) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return [];
+  return Object.keys(payload);
+}
+
+async function invokeWithDebug(name, payload) {
+  try {
+    return await ipcRenderer.invoke(name, payload);
+  } catch (err) {
+    console.error('[IPC_INVOKE_FAILED]', {
+      name,
+      payloadKeys: payloadKeys(payload),
+      stack: String(err?.stack || err),
+    });
+    throw err;
+  }
+}
 
 contextBridge.exposeInMainWorld('api', {
-  selectAudios: () => ipcRenderer.invoke('select-audios'),
-  selectImage: () => ipcRenderer.invoke('select-image'),
-  selectFolder: () => ipcRenderer.invoke('select-folder'),
+  selectAudios: () => invokeWithDebug('select-audios'),
+  selectImage: () => invokeWithDebug('select-image'),
+  selectFolder: () => invokeWithDebug('select-folder'),
 
-  ensureDir: (dirPath) => ipcRenderer.invoke('ensure-dir', dirPath),
-  openFolder: (folderPath) => ipcRenderer.invoke('open-folder', folderPath),
+  ensureDir: (payload) => invokeWithDebug('ensure-dir', payload),
+  openFolder: (folderPath) => invokeWithDebug('open-folder', folderPath),
 
-  readMetadata: (filePath) => ipcRenderer.invoke('read-metadata', filePath),
-  probeAudio: (filePath) => ipcRenderer.invoke('probe-audio', filePath),
+  readMetadata: (filePath) => invokeWithDebug('read-metadata', filePath),
+  probeAudio: (filePath) => invokeWithDebug('probe-audio', filePath),
+  listPresets: () => invokeWithDebug('list-presets'),
+  dpiProbe: (payload) => invokeWithDebug('dpi-probe', payload),
+  perfMark: (mark) => ipcRenderer.send('perf-mark', { mark }),
 
-  renderAlbum: (payload) => ipcRenderer.invoke('render-album', payload),
-  cancelRender: () => ipcRenderer.invoke('cancel-render'),
+  renderAlbum: (payload) => invokeWithDebug('render-album', payload),
+  cancelRender: () => invokeWithDebug('cancel-render'),
+  exportDiagnostics: (payload) => invokeWithDebug('export-diagnostics', payload),
 
   onRenderProgress: (handler) => {
     const listener = (_evt, data) => handler(data);
     ipcRenderer.on('render-progress', listener);
     return () => ipcRenderer.off('render-progress', listener);
   },
-
-  fileUrl: (p) => pathToFileURL(p).toString(),
-  pathBasename: (p) => path.basename(p),
-  pathBasenameNoExt: (p) => path.parse(p).name,
-  pathJoin: (...parts) => path.join(...parts),
+  onRenderStatus: (handler) => {
+    const listener = (_evt, data) => handler(data);
+    ipcRenderer.on('render-status', listener);
+    return () => ipcRenderer.off('render-status', listener);
+  },
 });
