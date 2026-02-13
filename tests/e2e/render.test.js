@@ -12,7 +12,7 @@ const imageFiles = ["test.jpg"];
 
 const projectRoot = path.join(__dirname, "..", "..");
 const fixturesDir = path.join(projectRoot, "fixtures");
-const outDir = path.join(projectRoot, "test-artifacts", "e2e");
+const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "album-to-video-render-e2e-"));
 
 function assertExists(p) {
   if (!fs.existsSync(p)) {

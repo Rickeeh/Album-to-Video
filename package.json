@@ -12,10 +12,15 @@
     "bootstrap:mac-bins": "node scripts/bootstrap-mac-binaries.js",
     "verify:mac-bins": "node scripts/verify-mac-binaries.js",
     "dist:mac": "npm run verify:mac-bins && electron-builder --mac dmg zip --universal --publish never",
-    "dist:win": "electron-builder --win nsis portable --x64 --publish never",
+    "dist:win": "npm run verify:win-bins && electron-builder --win nsis portable --x64 --publish never",
+    "release:win": "npm run dist:win && npm run release:hash",
     "test:smoke": "node scripts/smoke-test.js",
-    "test:e2e": "node tests/e2e/render.test.js",
-    "test": "npm run test:smoke && npm run test:e2e"
+    "test:e2e": "node tests/e2e/render.test.js && node tests/e2e/hardening.test.js",
+    "test": "npm run test:smoke && npm run test:e2e",
+    "verify:win-bins": "node scripts/verify-win-binaries.js",
+    "verify:invariants": "node scripts/verify-invariants.js",
+    "verify:all": "npm run test && npm run verify:win-bins && npm run verify:invariants",
+    "release:hash": "node scripts/release-sha256.js"
   },
   "devDependencies": {
     "electron": "^40.0.0",
@@ -79,12 +84,6 @@
       ]
     },
     "win": {
-      "extraResources": [
-        {
-          "from": "node_modules/@ffprobe-installer/win32-x64/ffprobe.exe",
-          "to": "bin/win32-x64/ffprobe.exe"
-        }
-      ],
       "target": [
         {
           "target": "nsis",

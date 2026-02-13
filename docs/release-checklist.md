@@ -20,6 +20,7 @@ Executar:
 - `npm test` ✅
 - `npm run verify:win-bins` ✅ (Windows: presença + integridade + SHA256 pinado)
 - `npm run dist:win` ✅ (gera instalador/portable Windows)
+- `npm run release:win` ✅ (gera `dist` + `SHA256SUMS.txt`)
 - `npm run dist:mac` ✅ (se aplicável)
 
 `FAIL = parar. Não “tentar na sorte”.`
@@ -98,4 +99,3 @@ Adicionar uma secção “Release” com:
 - “Para fazer release, siga `docs/release-checklist.md`”
 - “Windows requer bins vendorizados + `verify:win-bins`”
 - “Logs por sessão em `%APPDATA%/.../logs/...` (ver `logger.ready`)”
-
