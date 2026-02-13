@@ -973,20 +973,18 @@ function logStartupPartialArtifacts() {
     found.forEach((filePath) => matches.push(filePath));
   });
 
-  if (matches.length > 0) {
-    sessionLogger?.warn?.('startup.partial_found', {
-      partialCount: matches.length,
-      rootsScanned: roots.length,
-      examples: matches.slice(0, 5).map((p) => redactPathForLog(p)),
-      rootsWithMatches: perRoot.filter((item) => item.count > 0),
-    });
-  }
+  sessionLogger?.info?.('startup.partial_scan', {
+    foundCount: matches.length,
+    rootsScanned: roots.length,
+    examples: matches.slice(0, 5).map((p) => redactPathForLog(p)),
+    rootsWithMatches: perRoot.filter((item) => item.count > 0),
+  });
 }
 
-function movePartialToFinalOutput(partialPath, outputFinalPath, { jobId } = {}) {
+function movePartialToFinalOutput(partialPath, outputFinalPath) {
   try {
     fs.renameSync(partialPath, outputFinalPath);
-    return { exdevFallback: false };
+    return { exdevFallback: false, method: 'rename' };
   } catch (err) {
     if (err?.code !== 'EXDEV') throw err;
     fs.copyFileSync(partialPath, outputFinalPath);
@@ -997,8 +995,7 @@ function movePartialToFinalOutput(partialPath, outputFinalPath, { jobId } = {}) 
       throw e;
     }
     fs.unlinkSync(partialPath);
-    emitFinalizeStep(jobId, 'finalize.rename_outputs.exdev_fallback', { exdevFallback: true });
-    return { exdevFallback: true };
+    return { exdevFallback: true, method: 'copy_unlink_exdev' };
   }
 }
 
@@ -1950,7 +1947,7 @@ registerIpcHandler('render-album', async (event, payload) => {
       assertPathWithinBase(selectedExportFolder, partialPath, 'Partial output');
       assertPathWithinBase(selectedExportFolder, outputFinalPath, 'Final output');
       validatePartialOutput(partialPath);
-      const moveResult = movePartialToFinalOutput(partialPath, outputFinalPath, { jobId });
+      const moveResult = movePartialToFinalOutput(partialPath, outputFinalPath);
       if (moveResult.exdevFallback) exdevFallbackCount += 1;
       currentJob.cleanupContext.partialPaths.delete(partialPath);
       currentJob.cleanupContext.tmpPaths.delete(partialPath);
@@ -1959,6 +1956,10 @@ registerIpcHandler('render-album', async (event, payload) => {
       renamedCount += 1;
     }
     finalizeSummary.renameMs = Date.now() - renameStartedAtMs;
+    emitFinalizeStep(jobId, 'finalize.rename_outputs.method', {
+      method: exdevFallbackCount > 0 ? 'copy_unlink_exdev' : 'rename',
+      exdevFallback: exdevFallbackCount > 0,
+    });
     emitFinalizeStep(jobId, 'finalize.rename_outputs.end', {
       renamedCount,
       exdevFallback: exdevFallbackCount > 0,

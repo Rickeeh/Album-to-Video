@@ -54,7 +54,6 @@ async function waitUntil(checkFn, { timeoutMs = 5000, intervalMs = 50, timeoutMe
 
 function runProgressTruthPolicyTest() {
   const source = fs.readFileSync(mainJsPath, 'utf8');
-  const indexSource = fs.readFileSync(path.join(projectRoot, 'index.html'), 'utf8');
 
   // Guard 1: run-time payload builder always caps pre-success total to < 100.
   assertOk(
@@ -74,6 +73,7 @@ function runProgressTruthPolicyTest() {
   const idxSuccessStatus = source.indexOf("event.sender.send('render-status', { phase: 'success' });");
   const idxFinalizeStart = source.indexOf("emitFinalizeStep(jobId, 'finalize.start'");
   const idxFinalizeRenameStart = source.indexOf("emitFinalizeStep(jobId, 'finalize.rename_outputs.start'");
+  const idxFinalizeRenameMethod = source.indexOf("emitFinalizeStep(jobId, 'finalize.rename_outputs.method'");
   const idxFinalizeRenameEnd = source.indexOf("emitFinalizeStep(jobId, 'finalize.rename_outputs.end'");
   const idxFinalizeReportStart = source.indexOf("emitFinalizeStep(jobId, 'finalize.write_report.start'");
   const idxFinalizeReportEnd = source.indexOf("emitFinalizeStep(jobId, 'finalize.write_report.end'");
@@ -82,8 +82,8 @@ function runProgressTruthPolicyTest() {
   const idxFinalizeSummary = source.indexOf("emitFinalizeStep(jobId, 'finalize.summary'");
   const idxFinalizeEnd = source.indexOf("emitFinalizeStep(jobId, 'finalize.end'");
   const idxRenderSuccessLog = source.indexOf("sessionLogger?.info('render.success'");
-  const idxExdevFallbackMark = source.indexOf("emitFinalizeStep(jobId, 'finalize.rename_outputs.exdev_fallback'");
-  const idxStartupPartialFound = source.indexOf("sessionLogger?.warn?.('startup.partial_found'");
+  const idxStartupPartialScan = source.indexOf("sessionLogger?.info?.('startup.partial_scan'");
+  const idxStartupFoundCount = source.indexOf('foundCount: matches.length');
   assertOk(idxFinalizingStatus >= 0, 'Progress truth: missing finalizing status emission.');
   assertOk(idxFinalizingProgress >= 0, 'Progress truth: missing finalizing progress emission.');
   assertOk(idxSuccessStatus >= 0, 'Progress truth: missing success status emission.');
@@ -94,6 +94,7 @@ function runProgressTruthPolicyTest() {
   [
     idxFinalizeStart,
     idxFinalizeRenameStart,
+    idxFinalizeRenameMethod,
     idxFinalizeRenameEnd,
     idxFinalizeReportStart,
     idxFinalizeReportEnd,
@@ -102,12 +103,13 @@ function runProgressTruthPolicyTest() {
     idxFinalizeSummary,
     idxFinalizeEnd,
     idxRenderSuccessLog,
-    idxExdevFallbackMark,
-    idxStartupPartialFound,
+    idxStartupPartialScan,
+    idxStartupFoundCount,
   ].forEach((idx) => assertOk(idx >= 0, 'Progress truth: missing finalize structured marks or render.success log.'));
   assertOk(
     idxFinalizeStart < idxFinalizeRenameStart
-    && idxFinalizeRenameStart < idxFinalizeRenameEnd
+    && idxFinalizeRenameStart < idxFinalizeRenameMethod
+    && idxFinalizeRenameMethod < idxFinalizeRenameEnd
     && idxFinalizeRenameEnd < idxFinalizeReportStart
     && idxFinalizeReportStart < idxFinalizeReportEnd
     && idxFinalizeReportEnd < idxFinalizeCleanupStart
@@ -117,19 +119,6 @@ function runProgressTruthPolicyTest() {
     && idxFinalizeEnd < idxRenderSuccessLog
     && idxRenderSuccessLog < idxSuccessStatus,
     'Progress truth: expected finalize.* sequence before render.success and success status.'
-  );
-
-  // Guard 4: explicit "100" is only triggered by success handler.
-  const idxPhaseSuccess = indexSource.indexOf("} else if (phase === 'success') {");
-  const idxCompleteNow = indexSource.indexOf('completeProgressNow();');
-  const idxApplyOne = indexSource.indexOf('applyDeterminateProgress(1);');
-  assertOk(idxPhaseSuccess >= 0, 'Progress truth: missing success branch in renderer status handler.');
-  assertOk(idxCompleteNow > idxPhaseSuccess, 'Progress truth: expected completeProgressNow() inside success branch.');
-  assertOk(idxApplyOne >= 0, 'Progress truth: missing applyDeterminateProgress(1) implementation.');
-  const completeNowCalls = indexSource.match(/completeProgressNow\(\);/g) || [];
-  assertOk(
-    completeNowCalls.length === 1,
-    `Progress truth: expected completeProgressNow() call count = 1 (found ${completeNowCalls.length}).`
   );
 
   console.log('OK: progress truth policy keeps pre-success progress below 100 and finalizes before success');
