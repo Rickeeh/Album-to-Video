@@ -6,10 +6,12 @@ const os = require('os');
 const { spawn } = require('child_process');
 const { cleanupJob } = require('./src/main/cleanup');
 const { createSessionLogger } = require('./src/main/logger');
+const { exportDiagnosticsBundle, MAX_LOG_EVENTS } = require('./src/main/diagnostics');
 const { getPreset, listPresets } = require('./src/main/presets');
 
 let mainWindow = null;
 let sessionLogger = null;
+let lastSelectedExportFolder = null;
 
 if (process.platform === 'win32') {
   try {
@@ -131,35 +133,89 @@ function resolveBundledBinaries() {
   }
 
   if (process.platform === 'win32') {
-    const vendoredWinFfprobe = resolveVendoredWinBinary(path.join('bin', 'win32-x64', 'ffprobe.exe'));
+    const vendoredWinFfmpeg = resolveVendoredWinBinary(path.join('bin', 'win32', 'ffmpeg.exe'));
+    if (vendoredWinFfmpeg) {
+      FFMPEG_BIN = vendoredWinFfmpeg;
+      FFMPEG_SOURCE = 'vendored';
+    }
+
+    const vendoredWinFfprobe = resolveVendoredWinBinary(path.join('bin', 'win32', 'ffprobe.exe'));
     if (vendoredWinFfprobe) {
       FFPROBE_BIN = vendoredWinFfprobe;
       FFPROBE_SOURCE = 'vendored';
     }
   }
 
-  try {
-    // ffmpeg-static exports an absolute path to the platform binary
-    // eslint-disable-next-line global-require
-    if (!FFMPEG_BIN) {
-      const ffmpegStatic = require('ffmpeg-static');
-      if (typeof ffmpegStatic === 'string' && ffmpegStatic.length) {
-        FFMPEG_BIN = ffmpegStatic;
-        FFMPEG_SOURCE = 'dependency';
+  if (!app.isPackaged) {
+    try {
+      // ffmpeg-static exports an absolute path to the platform binary
+      // eslint-disable-next-line global-require
+      if (!FFMPEG_BIN) {
+        const ffmpegStatic = require('ffmpeg-static');
+        if (typeof ffmpegStatic === 'string' && ffmpegStatic.length) {
+          FFMPEG_BIN = ffmpegStatic;
+          FFMPEG_SOURCE = 'dependency';
+        }
       }
-    }
-  } catch {}
+    } catch {}
 
-  try {
-    // eslint-disable-next-line global-require
-    if (!FFPROBE_BIN) {
-      const ffprobeInstaller = require('@ffprobe-installer/ffprobe');
-      if (ffprobeInstaller?.path) {
-        FFPROBE_BIN = ffprobeInstaller.path;
-        FFPROBE_SOURCE = 'dependency';
+    try {
+      // eslint-disable-next-line global-require
+      if (!FFPROBE_BIN) {
+        const ffprobeInstaller = require('@ffprobe-installer/ffprobe');
+        if (ffprobeInstaller?.path) {
+          FFPROBE_BIN = ffprobeInstaller.path;
+          FFPROBE_SOURCE = 'dependency';
+        }
       }
+    } catch {}
+  }
+}
+
+function buildEnginePathProbe() {
+  const resourcesPath = process.resourcesPath || null;
+  const expectedWinFfmpegPath = resourcesPath ? path.join(resourcesPath, 'bin', 'win32', 'ffmpeg.exe') : null;
+  const expectedWinFfprobePath = resourcesPath ? path.join(resourcesPath, 'bin', 'win32', 'ffprobe.exe') : null;
+  const devWinFfmpegPath = path.join(__dirname, 'resources', 'bin', 'win32', 'ffmpeg.exe');
+  const devWinFfprobePath = path.join(__dirname, 'resources', 'bin', 'win32', 'ffprobe.exe');
+
+  return {
+    appIsPackaged: app.isPackaged,
+    execPath: process.execPath || null,
+    resourcesPath,
+    expectedWinFfmpegPath,
+    expectedWinFfmpegExists: Boolean(expectedWinFfmpegPath && fs.existsSync(expectedWinFfmpegPath)),
+    expectedWinFfprobePath,
+    expectedWinFfprobeExists: Boolean(expectedWinFfprobePath && fs.existsSync(expectedWinFfprobePath)),
+    devWinFfmpegPath,
+    devWinFfmpegExists: fs.existsSync(devWinFfmpegPath),
+    devWinFfprobePath,
+    devWinFfprobeExists: fs.existsSync(devWinFfprobePath),
+  };
+}
+
+function getEngineBinariesSnapshot() {
+  return {
+    FFMPEG_SOURCE,
+    FFPROBE_SOURCE,
+    FFMPEG_PATH: FFMPEG_BIN || null,
+    FFPROBE_PATH: FFPROBE_BIN || null,
+    FFMPEG_BIN: Boolean(FFMPEG_BIN),
+    FFPROBE_BIN: Boolean(FFPROBE_BIN),
+  };
+}
+
+function getPinnedWinBinaryHashes() {
+  try {
+    // Optional source of truth used by verify:win-bins.
+    // This file may not exist in packaged runtime.
+    // eslint-disable-next-line global-require
+    const verify = require('./scripts/verify-win-binaries.js');
+    if (verify && verify.expectedSha256 && typeof verify.expectedSha256 === 'object') {
+      return verify.expectedSha256;
     }
   } catch {}
+  return null;
 }
 
 // 🎯 Performance principle:
@@ -192,9 +248,8 @@ function ensureBundledBinaries() {
     throw e;
   }
   if (!FFPROBE_BIN || !path.isAbsolute(FFPROBE_BIN)) {
-    const e = new Error('Bundled ffprobe is required but not available.');
-    e.code = REASON_CODES.UNCAUGHT;
-    throw e;
+    FFPROBE_BIN = null;
+    FFPROBE_SOURCE = 'missing';
   }
 }
 
@@ -215,25 +270,123 @@ function ensureDir(dirPath) {
   }
 }
 
-function assertFileReadable(filePath, label) {
-  if (!filePath) throw new Error(`Missing ${label}`);
+function isBlockedWindowsPath(rawPath) {
+  const normalized = String(rawPath || '').replace(/\//g, '\\');
+  // Device namespace and UNC paths are not supported for renderer-provided paths.
+  if (/^\\\\\?\\/.test(normalized)) return true;
+  if (/^\\\\\.\\/.test(normalized)) return true;
+  if (/^\\\\/.test(normalized)) return true;
+  return false;
+}
+
+function isBlockedUnixPath(absolutePath) {
+  return absolutePath === '/dev'
+    || absolutePath.startsWith('/dev/')
+    || absolutePath === '/proc'
+    || absolutePath.startsWith('/proc/')
+    || absolutePath === '/sys'
+    || absolutePath.startsWith('/sys/');
+}
+
+function assertAbsolutePath(rawPath, label) {
+  const value = String(rawPath || '').trim();
+  if (!value) throw new Error(`Missing ${label}`);
+  if (value.includes('\0')) throw new Error(`${label} contains invalid characters.`);
+  if (process.platform === 'win32' && isBlockedWindowsPath(value)) {
+    throw new Error(`${label} uses an unsupported Windows path prefix.`);
+  }
+  if (!path.isAbsolute(value)) throw new Error(`${label} must be an absolute path.`);
+  const resolved = path.resolve(value);
+  if (process.platform !== 'win32' && isBlockedUnixPath(resolved)) {
+    throw new Error(`${label} points to a blocked system path.`);
+  }
+  return resolved;
+}
+
+function isPathWithinBase(basePath, targetPath) {
+  const rel = path.relative(basePath, targetPath);
+  if (!rel) return true;
+  return !rel.startsWith('..') && !path.isAbsolute(rel);
+}
+
+function resolveExistingDirectoryPath(rawPath, label) {
+  const absolute = assertAbsolutePath(rawPath, label);
+  let real;
   try {
-    const stat = fs.statSync(filePath);
-    if (!stat.isFile()) throw new Error('not a file');
-    fs.accessSync(filePath, fs.constants.R_OK);
+    real = fs.realpathSync.native(absolute);
   } catch (err) {
-    throw new Error(`${label} not readable: ${filePath}. ${err.message}`);
+    throw new Error(`${label} does not exist: ${absolute}. ${err.message}`);
+  }
+  try {
+    const stat = fs.statSync(real);
+    if (!stat.isDirectory()) throw new Error('not a directory');
+    fs.accessSync(real, fs.constants.R_OK | fs.constants.X_OK);
+    return real;
+  } catch (err) {
+    throw new Error(`${label} not accessible: ${real}. ${err.message}`);
   }
 }
 
+function resolveExistingReadableFilePath(rawPath, label) {
+  const absolute = assertAbsolutePath(rawPath, label);
+  let real;
+  try {
+    real = fs.realpathSync.native(absolute);
+  } catch (err) {
+    throw new Error(`${label} does not exist: ${absolute}. ${err.message}`);
+  }
+  try {
+    const stat = fs.statSync(real);
+    if (!stat.isFile()) throw new Error('not a file');
+    fs.accessSync(real, fs.constants.R_OK);
+    return real;
+  } catch (err) {
+    throw new Error(`${label} not readable: ${real}. ${err.message}`);
+  }
+}
+
+function assertPathWithinBase(basePath, targetPath, label) {
+  if (!isPathWithinBase(basePath, targetPath)) {
+    throw new Error(`${label} must stay inside the selected export folder.`);
+  }
+}
+
+function assertFileReadable(filePath, label) {
+  resolveExistingReadableFilePath(filePath, label);
+}
+
 function ensureWritableDir(dirPath) {
-  ensureDir(dirPath);
-  const testPath = path.join(dirPath, `.write-test-${process.pid}-${Date.now()}`);
+  const safeDir = resolveExistingDirectoryPath(dirPath, 'Export folder');
+  const testPath = path.join(safeDir, `.write-test-${process.pid}-${Date.now()}`);
   try {
     fs.writeFileSync(testPath, '');
     fs.unlinkSync(testPath);
   } catch (err) {
-    throw new Error(`Export folder not writable: ${dirPath}. ${err.message}`);
+    throw new Error(`Export folder not writable: ${safeDir}. ${err.message}`);
+  }
+}
+
+function getAppLogDir() {
+  app.setAppLogsPath();
+  const logsRoot = app.getPath('logs');
+  const appLogDir = path.join(logsRoot, 'Album-to-Video');
+  ensureDir(appLogDir);
+  return appLogDir;
+}
+
+function findLatestSessionLogPath(appLogDir) {
+  try {
+    const files = fs.readdirSync(appLogDir)
+      .filter((name) => /^session-.*\.jsonl$/i.test(name))
+      .map((name) => {
+        const fullPath = path.join(appLogDir, name);
+        const stat = fs.statSync(fullPath);
+        return { fullPath, mtimeMs: stat.mtimeMs };
+      })
+      .sort((a, b) => b.mtimeMs - a.mtimeMs);
+    return files[0]?.fullPath || null;
+  } catch {
+    return null;
   }
 }
 
@@ -256,6 +409,12 @@ function sanitizeFileBaseName(name) {
   }
 
   return cleaned || 'Untitled';
+}
+
+function sanitizeAlbumFolderName(name) {
+  let cleaned = sanitizeFileBaseName(name || 'Album');
+  if (cleaned === '.' || cleaned === '..') cleaned = 'Album';
+  return cleaned;
 }
 
 function formatTimestampForFile(d = new Date()) {
@@ -381,24 +540,115 @@ function runFfprobeJson(args, timeoutMs) {
   });
 }
 
+function runFfmpegValidationProbe(audioPath, timeoutMs) {
+  return new Promise((resolve) => {
+    if (!FFMPEG_BIN || !path.isAbsolute(FFMPEG_BIN)) {
+      resolve({ ok: false, stderr: 'ffmpeg binary missing' });
+      return;
+    }
+
+    const p = spawn(FFMPEG_BIN, [
+      '-v', 'error',
+      '-i', audioPath,
+      '-f', 'null',
+      '-',
+    ], { windowsHide: true });
+
+    let stderr = '';
+    const STDERR_MAX = 16 * 1024;
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      try { p.kill('SIGKILL'); } catch {}
+    }, Math.max(1000, timeoutMs || 0));
+
+    p.stderr.on('data', (chunk) => {
+      stderr += chunk.toString();
+      if (stderr.length > STDERR_MAX) stderr = stderr.slice(-STDERR_MAX);
+    });
+
+    p.on('close', (code) => {
+      clearTimeout(timeout);
+      if (timedOut) {
+        resolve({ ok: false, stderr: `${stderr}\nprobe timeout`.trim() });
+        return;
+      }
+      resolve({ ok: code === 0, stderr });
+    });
+
+    p.on('error', (err) => {
+      clearTimeout(timeout);
+      resolve({ ok: false, stderr: String(err?.message || err || 'ffmpeg probe error') });
+    });
+  });
+}
+
+async function durationFromMetadata(audioPath) {
+  try {
+    const mm = getMusicMetadata();
+    const meta = await mm.parseFile(audioPath, { duration: true });
+    const durationSec = Number(meta?.format?.duration || 0);
+    if (Number.isFinite(durationSec) && durationSec > 0) return durationSec;
+  } catch {}
+  return 0;
+}
+
 async function probeAudioInfo(audioPath, timeoutMs) {
-  const data = await runFfprobeJson([
-    '-v', 'error',
-    '-show_entries', 'stream=codec_type,duration',
-    '-show_entries', 'format=duration',
-    '-of', 'json',
-    audioPath,
-  ], timeoutMs || 5000);
+  resolveBundledBinaries();
+  const safeTimeoutMs = Math.max(1000, timeoutMs || 5000);
+  const extension = String(path.extname(audioPath || '') || '').toLowerCase();
+  let probeMethod = 'ffprobe';
+  let errorTail = '';
 
-  const streams = Array.isArray(data?.streams) ? data.streams : [];
-  const hasAudio = streams.some((s) => s.codec_type === 'audio');
+  if (FFPROBE_BIN && path.isAbsolute(FFPROBE_BIN)) {
+    const data = await runFfprobeJson([
+      '-v', 'error',
+      '-show_entries', 'stream=codec_type,duration',
+      '-show_entries', 'format=duration',
+      '-of', 'json',
+      audioPath,
+    ], safeTimeoutMs);
 
-  const streamDur = streams.find((s) => s.codec_type === 'audio')?.duration;
-  const formatDur = data?.format?.duration;
-  const durationSec = parseFloat(String(streamDur || formatDur || '0'));
-  const safeDuration = Number.isFinite(durationSec) && durationSec > 0 ? durationSec : 0;
+    const streams = Array.isArray(data?.streams) ? data.streams : [];
+    const hasAudio = streams.some((s) => s.codec_type === 'audio');
+    const streamDur = streams.find((s) => s.codec_type === 'audio')?.duration;
+    const formatDur = data?.format?.duration;
+    const durationSec = parseFloat(String(streamDur || formatDur || '0'));
+    const safeDuration = Number.isFinite(durationSec) && durationSec > 0 ? durationSec : 0;
 
-  return { ok: hasAudio, durationSec: safeDuration };
+    if (hasAudio && safeDuration > 0) {
+      return { ok: true, durationSec: safeDuration, probeMethod };
+    }
+    errorTail = 'ffprobe returned no audio stream or invalid duration';
+  } else {
+    probeMethod = 'ffmpeg-fallback';
+    errorTail = 'ffprobe missing';
+  }
+
+  const fallback = await runFfmpegValidationProbe(audioPath, safeTimeoutMs);
+  const fallbackMethod = FFPROBE_BIN ? 'ffmpeg-fallback' : 'ffmpeg';
+  if (fallback.ok) {
+    const metadataDuration = await durationFromMetadata(audioPath);
+    const safeDuration = metadataDuration > 0 ? metadataDuration : 1;
+    return {
+      ok: true,
+      durationSec: safeDuration,
+      probeMethod: fallbackMethod,
+    };
+  }
+
+  const stderrTail = tailLines(fallback.stderr || errorTail, 6).slice(0, 300);
+  sessionLogger?.warn('audio.probe_unsupported', {
+    extension,
+    probeMethod: fallbackMethod,
+    stderrTail,
+  });
+  return {
+    ok: false,
+    durationSec: 0,
+    probeMethod: fallbackMethod,
+    stderrTail,
+  };
 }
 
 function uniqueOutputPath(dir, baseName, ext) {
@@ -522,7 +772,12 @@ async function buildRenderPlan(payload) {
   if (!exportFolder) throw new Error('Missing export folder');
 
   assertFileReadable(imagePath, 'Cover art');
-  ensureWritableDir(exportFolder);
+  const requestedExportFolder = assertAbsolutePath(exportFolder, 'Export folder');
+  if (!lastSelectedExportFolder) throw new Error('Export folder was not selected from the picker.');
+  const selectedExportFolder = resolveExistingDirectoryPath(lastSelectedExportFolder, 'Selected export folder');
+  const resolvedExportFolder = resolveExistingDirectoryPath(requestedExportFolder, 'Export folder');
+  assertPathWithinBase(selectedExportFolder, resolvedExportFolder, 'Export folder');
+  ensureWritableDir(resolvedExportFolder);
 
   const preset = getPreset(presetKey);
   const resolvedPresetKey = preset.key;
@@ -584,7 +839,7 @@ async function buildRenderPlan(payload) {
       t.trackNo,
       prefixTrackNumber,
     );
-    const outputFinalPath = uniquePlannedOutputPath(exportFolder, outputBase, '.mp4', reservedOutputs);
+    const outputFinalPath = uniquePlannedOutputPath(resolvedExportFolder, outputBase, '.mp4', reservedOutputs);
     const tmpPath = buildTmpPath(outputFinalPath);
     const probe = await probeAudioInfo(t.audioPath, 5000);
     const durationSec = Number(probe?.durationSec || 0);
@@ -613,7 +868,7 @@ async function buildRenderPlan(payload) {
   const totalDurationSec = plannedTracks.reduce((sum, t) => sum + t.durationSec, 0);
   return {
     jobId,
-    exportFolder,
+    exportFolder: resolvedExportFolder,
     presetKey: resolvedPresetKey,
     presetDecisions,
     imagePath,
@@ -773,6 +1028,9 @@ function createWindow() {
       sandbox: true,
     },
   });
+  if (process.platform === 'win32') {
+    try { mainWindow.removeMenu(); } catch {}
+  }
   try {
     const { screen } = require('electron');
     const d = screen.getPrimaryDisplay?.();
@@ -811,10 +1069,12 @@ function createWindow() {
   });
   mainWindow.webContents.on('before-input-event', (event, input) => {
     const ctrlOrCmd = input.control || input.meta;
-    if (!ctrlOrCmd) return;
-
     const key = String(input.key || '').toLowerCase();
-    if (key === '+' || key === '-' || key === '=' || key === '0') {
+    if ((input.type === 'mouseWheel' && ctrlOrCmd) || input.type === 'gesturePinch') {
+      event.preventDefault();
+      return;
+    }
+    if (ctrlOrCmd && (key === '+' || key === '-' || key === '=' || key === '0')) {
       event.preventDefault();
     }
   });
@@ -838,11 +1098,9 @@ app.whenReady().then(() => {
       });
       resolveBundledBinaries();
       sessionLogger.info('engine.binaries', {
-        FFMPEG_SOURCE,
-        FFPROBE_SOURCE,
-        FFMPEG_BIN: Boolean(FFMPEG_BIN),
-        FFPROBE_BIN: Boolean(FFPROBE_BIN),
+        ...getEngineBinariesSnapshot(),
       });
+      sessionLogger.info('engine.startup_probe', buildEnginePathProbe());
       try {
         const { screen } = require('electron');
         const d = screen.getPrimaryDisplay?.();
@@ -899,7 +1157,12 @@ registerIpcHandler('select-image', async () => {
 
 registerIpcHandler('select-folder', async () => {
   const result = await dialog.showOpenDialog({ properties: ['openDirectory'] });
-  return result.canceled ? null : (result.filePaths?.[0] || null);
+  if (result.canceled) return null;
+  const pickedPath = result.filePaths?.[0] || null;
+  if (!pickedPath) return null;
+  const safePath = resolveExistingDirectoryPath(pickedPath, 'Export folder');
+  lastSelectedExportFolder = safePath;
+  return safePath;
 });
 
 registerIpcHandler('list-presets', async () => listPresets());
@@ -909,13 +1172,25 @@ registerIpcHandler('dpi-probe', async (_event, payload) => {
   return true;
 });
 
-registerIpcHandler('ensure-dir', async (_event, dirPath) => {
-  ensureDir(dirPath);
-  return true;
+registerIpcHandler('ensure-dir', async (_event, payload) => {
+  if (!lastSelectedExportFolder) throw new Error('Export folder not selected.');
+  const selectedExportFolder = resolveExistingDirectoryPath(lastSelectedExportFolder, 'Export folder');
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw new Error('Invalid ensure-dir payload.');
+  }
+  const rawAlbumFolderName = payload.albumFolderName;
+  const albumFolderName = sanitizeAlbumFolderName(rawAlbumFolderName);
+  const requestedDir = path.join(selectedExportFolder, albumFolderName);
+  ensureDir(requestedDir);
+  const resolvedDir = resolveExistingDirectoryPath(requestedDir, 'Release folder');
+  assertPathWithinBase(selectedExportFolder, resolvedDir, 'Release folder');
+  return resolvedDir;
 });
 
 registerIpcHandler('open-folder', async (_event, folderPath) => {
-  await shell.openPath(folderPath);
+  const safeFolder = resolveExistingDirectoryPath(folderPath, 'Folder');
+  const err = await shell.openPath(safeFolder);
+  if (err) throw new Error(`Failed to open folder: ${err}`);
   return true;
 });
 
@@ -928,8 +1203,9 @@ ipcMain.on('perf-mark', (_event, payload) => {
 // ---------------- Metadata ----------------
 registerIpcHandler('read-metadata', async (_event, filePath) => {
   try {
+    const safeFilePath = resolveExistingReadableFilePath(filePath, 'Audio file');
     const mm = getMusicMetadata();
-    const meta = await mm.parseFile(filePath, { duration: false });
+    const meta = await mm.parseFile(safeFilePath, { duration: false });
     const artist = (meta.common.artist || meta.common?.artists?.[0] || '').trim();
     const title = (meta.common.title || '').trim();
     const album = (meta.common.album || '').trim();
@@ -944,7 +1220,8 @@ registerIpcHandler('read-metadata', async (_event, filePath) => {
 
 registerIpcHandler('probe-audio', async (_event, filePath) => {
   try {
-    return await probeAudioInfo(filePath, 5000);
+    const safeFilePath = resolveExistingReadableFilePath(filePath, 'Audio file');
+    return await probeAudioInfo(safeFilePath, 5000);
   } catch {
     return { ok: false, durationSec: 0 };
   }
@@ -957,6 +1234,54 @@ registerIpcHandler('cancel-render', async () => {
   currentJob.cancelReason = REASON_CODES.CANCELLED;
   await cleanupJob(currentJob.id, REASON_CODES.CANCELLED, currentJob.cleanupContext);
   return true;
+});
+
+registerIpcHandler('export-diagnostics', async (_event, payload) => {
+  const requestedExportFolder = String(payload?.exportFolder || '').trim();
+  let destinationDir;
+  let renderReportPath = null;
+
+  if (requestedExportFolder) {
+    const safeExportFolder = resolveExistingDirectoryPath(requestedExportFolder, 'Export folder');
+    if (lastSelectedExportFolder) {
+      const selectedExportFolder = resolveExistingDirectoryPath(lastSelectedExportFolder, 'Selected export folder');
+      assertPathWithinBase(selectedExportFolder, safeExportFolder, 'Export folder');
+    }
+    destinationDir = path.join(safeExportFolder, 'Logs');
+    ensureDir(destinationDir);
+    renderReportPath = path.join(destinationDir, 'render-report.json');
+  } else {
+    destinationDir = getAppLogDir();
+  }
+
+  const appLogDir = getAppLogDir();
+  const sessionLogPath = sessionLogger?.filePath || findLatestSessionLogPath(appLogDir);
+  const appInfo = {
+    appVersion: app.getVersion(),
+    electronVersion: process.versions.electron,
+    platform: process.platform,
+    arch: process.arch,
+    isPackaged: app.isPackaged,
+    execPath: process.execPath || null,
+    resourcesPath: process.resourcesPath || null,
+  };
+  const engineInfo = {
+    GLOBAL_FPS,
+    binaries: getEngineBinariesSnapshot(),
+    startup_probe: buildEnginePathProbe(),
+  };
+
+  const { diagnosticsPath } = await exportDiagnosticsBundle({
+    destinationDir,
+    appInfo,
+    engineInfo,
+    sessionLogPath,
+    renderReportPath,
+    pinnedWinBinaryHashes: getPinnedWinBinaryHashes(),
+    maxLogEvents: MAX_LOG_EVENTS,
+  });
+  sessionLogger?.info?.('diagnostics.exported', { diagnosticsPath, requestedExportFolder: requestedExportFolder || null });
+  return { ok: true, diagnosticsPath };
 });
 
 function runFfmpegStillImage({
@@ -974,6 +1299,10 @@ function runFfmpegStillImage({
   totalDurationSec,
   elapsedBeforeSec,
   totalDurationKnown,
+  jobTotalMs,
+  jobDoneMsBeforeTrack,
+  getHasRealSignal,
+  markHasRealSignal,
   audioMode,
   jobId,
 }) {
@@ -998,6 +1327,9 @@ function runFfmpegStillImage({
     }
     const durationKnown = Number.isFinite(dSec) && dSec > 0.25;
     const durationMs = durationKnown ? Math.floor(dSec * 1000) : 0;
+    const safeTrackCount = Math.max(1, Number(trackCount) || 1);
+    const safeJobTotalMs = Math.floor(Number(jobTotalMs || 0));
+    const jobDoneBaseMs = Math.max(0, Math.floor(Number(jobDoneMsBeforeTrack || 0)));
 
     let stderr = '';
     const STDERR_MAX = 64 * 1024;
@@ -1007,6 +1339,8 @@ function runFfmpegStillImage({
     const startedAtMs = Date.now();
     const startedAt = new Date(startedAtMs).toISOString();
     let lastOutTimeMs = 0;
+    let trackMaxOutTimeMs = 0;
+    let lastSentJobDoneMs = jobDoneBaseMs;
     let speedEwma = 0;
     const speedAlpha = 0.25;
 
@@ -1020,6 +1354,38 @@ function runFfmpegStillImage({
         if (totalMs > 0) pct = (elapsedMs / totalMs) * 100;
       }
       return Math.min(99.9, Math.max(0, pct));
+    };
+    const buildProgressPayload = ({
+      percentTrack,
+      phase,
+      isFinal,
+      indeterminate,
+      jobDoneMs,
+    }) => {
+      const safeDoneMs = Math.max(0, Math.min(safeJobTotalMs, Math.floor(Number(jobDoneMs || 0))));
+      const hasRealSignal = typeof getHasRealSignal === 'function' && getHasRealSignal() === true;
+      const rawProgress = (hasRealSignal && safeJobTotalMs > 0)
+        ? Math.max(0, Math.min(1, safeDoneMs / safeJobTotalMs))
+        : null;
+      const safePercentTrack = Math.max(0, Math.min(99.9, Number(percentTrack || 0)));
+      const safePercentTotal = rawProgress === null
+        ? 0
+        : Math.max(0, Math.min(99.9, rawProgress * 100));
+      return {
+        trackIndex,
+        trackCount: safeTrackCount,
+        audioPath,
+        outputPath: outputForProgress,
+        percentTrack: safePercentTrack,
+        percentTotal: safePercentTotal,
+        indeterminate: Boolean(indeterminate),
+        isFinal: Boolean(isFinal),
+        phase,
+        jobTotalMs: safeJobTotalMs,
+        jobDoneMs: safeDoneMs,
+        hasRealSignal,
+        rawProgress,
+      };
     };
     const args = [
       ...baseArgs,
@@ -1082,54 +1448,42 @@ function runFfmpegStillImage({
           const v = parseInt(line.split('=')[1], 10);
           if (Number.isFinite(v)) {
             lastOutTimeMs = v;
+            trackMaxOutTimeMs = Math.max(trackMaxOutTimeMs, Math.max(0, v));
+            if (trackMaxOutTimeMs > 0 && typeof markHasRealSignal === 'function') {
+              markHasRealSignal();
+            }
+            const doneMs = jobDoneBaseMs + trackMaxOutTimeMs;
+            lastSentJobDoneMs = doneMs;
             if (durationKnown) {
               const pctTrack = computePercentTrack();
-              let pctTotal = ((trackIndex + (pctTrack || 0) / 100) / Math.max(1, trackCount)) * 100;
-              if (totalDurationKnown && totalDurationSec > 0) {
-                const progressSec = (elapsedBeforeSec || 0) + ((pctTrack || 0) / 100) * dSec;
-                pctTotal = (progressSec / totalDurationSec) * 100;
-              }
-
-              event.sender.send('render-progress', {
-                trackIndex,
-                trackCount,
-                audioPath,
-                outputPath: outputForProgress,
+              event.sender.send('render-progress', buildProgressPayload({
                 percentTrack: pctTrack || 0,
-                percentTotal: Math.min(100, pctTotal),
+                phase: 'ENCODING',
+                isFinal: false,
                 indeterminate: false,
-                isFinal: false,
-              });
+                jobDoneMs: doneMs,
+              }));
             } else {
-              event.sender.send('render-progress', {
-                trackIndex,
-                trackCount,
-                audioPath,
-                outputPath: outputForProgress,
+              event.sender.send('render-progress', buildProgressPayload({
                 percentTrack: 0,
-                percentTotal: totalDurationKnown && totalDurationSec > 0
-                  ? ((elapsedBeforeSec || 0) / totalDurationSec) * 100
-                  : (trackIndex / Math.max(1, trackCount)) * 100,
-                indeterminate: true,
+                phase: 'ENCODING',
                 isFinal: false,
-              });
+                indeterminate: true,
+                jobDoneMs: doneMs,
+              }));
             }
           }
         } else if (line === 'progress=end') {
-          let pctTotal = ((trackIndex + 1) / Math.max(1, trackCount)) * 100;
-          if (totalDurationKnown && totalDurationSec > 0) {
-            pctTotal = ((elapsedBeforeSec || 0) + dSec) / totalDurationSec * 100;
-          }
-          event.sender.send('render-progress', {
-            trackIndex,
-            trackCount,
-            audioPath,
-            outputPath: outputForProgress,
-            percentTrack: 100,
-            percentTotal: Math.min(100, pctTotal),
-            indeterminate: false,
+          const doneMs = jobDoneBaseMs + trackMaxOutTimeMs;
+          lastSentJobDoneMs = doneMs;
+          const isLastTrack = trackIndex === (safeTrackCount - 1);
+          event.sender.send('render-progress', buildProgressPayload({
+            percentTrack: 99.9,
+            phase: isLastTrack ? 'FINALIZING' : 'ENCODING',
             isFinal: true,
-          });
+            indeterminate: false,
+            jobDoneMs: doneMs,
+          }));
         }
       }
     });
@@ -1178,6 +1532,7 @@ function runFfmpegStillImage({
           endTs: endedAt,
           durationMs: endedAtMs - startedAtMs,
           durationSec: dSec,
+          jobDoneMs: lastSentJobDoneMs,
         });
         return;
       }
@@ -1233,6 +1588,7 @@ registerIpcHandler('render-album', async (event, payload) => {
     stagingPaths: new Set(),
     stagingClosers: new Set(),
     outputFolder: exportFolder,
+    baseExportFolder: lastSelectedExportFolder || null,
     createAlbumFolder: Boolean(createAlbumFolder),
     safeRmdirIfEmpty,
     logger: sessionLogger,
@@ -1243,6 +1599,14 @@ registerIpcHandler('render-album', async (event, payload) => {
   let debugLogger = null;
   const totalDurationSec = plan.totalDurationSec;
   const totalDurationKnown = totalDurationSec > 0;
+  const jobTotalMs = tracks.reduce((sum, t) => {
+    const ms = Math.floor(Math.max(0, Number(t?.durationSec || 0)) * 1000);
+    return sum + (Number.isFinite(ms) ? ms : 0);
+  }, 0);
+  let jobDoneMs = 0;
+  let jobHasRealSignal = false;
+  const markJobHasRealSignal = () => { jobHasRealSignal = true; };
+  const getJobHasRealSignal = () => jobHasRealSignal;
   const jobStartedAtMs = Date.now();
   const report = {
     appVersion: app.getVersion(),
@@ -1286,6 +1650,27 @@ registerIpcHandler('render-album', async (event, payload) => {
     }
     sessionLogger?.info('render.start', { jobId, trackCount: tracks.length, exportFolder });
     event.sender.send('render-status', { phase: 'rendering' });
+    if (jobTotalMs <= 0) {
+      sessionLogger?.warn('progress.job_total_missing', {
+        jobId,
+        trackCount: tracks.length,
+        totalDurationSec,
+        jobTotalMs,
+      });
+    }
+    event.sender.send('render-progress', {
+      trackIndex: 0,
+      trackCount: Math.max(1, tracks.length),
+      phase: 'PREPARING',
+      jobTotalMs,
+      jobDoneMs: 0,
+      rawProgress: null,
+      hasRealSignal: false,
+      percentTrack: 0,
+      percentTotal: 0,
+      indeterminate: true,
+      isFinal: false,
+    });
 
     if (debugLogger) {
       debugLogger.log(`[probe] tracks=${tracks.length} totalDurationSec=${totalDurationSec.toFixed(3)} known=${totalDurationKnown}`);
@@ -1348,6 +1733,10 @@ registerIpcHandler('render-album', async (event, payload) => {
           totalDurationSec,
           elapsedBeforeSec,
           totalDurationKnown,
+          jobTotalMs,
+          jobDoneMsBeforeTrack: jobDoneMs,
+          getHasRealSignal: getJobHasRealSignal,
+          markHasRealSignal: markJobHasRealSignal,
           audioMode: 'copy',
           jobId,
         });
@@ -1384,6 +1773,10 @@ registerIpcHandler('render-album', async (event, payload) => {
           totalDurationSec,
           elapsedBeforeSec,
           totalDurationKnown,
+          jobTotalMs,
+          jobDoneMsBeforeTrack: jobDoneMs,
+          getHasRealSignal: getJobHasRealSignal,
+          markHasRealSignal: markJobHasRealSignal,
           audioMode: 'aac',
           jobId,
         });
@@ -1397,6 +1790,7 @@ registerIpcHandler('render-album', async (event, payload) => {
       trackReport.durationMs = runResult.durationMs;
       trackReport.exitCode = runResult.exitCode;
       trackReport.stderrTail = runResult.stderrTail;
+      jobDoneMs = Math.max(jobDoneMs, Math.floor(Number(runResult?.jobDoneMs || 0)));
 
       validateTmpOutput(tmpPath);
       fs.renameSync(tmpPath, outputFinalPath);
@@ -1410,6 +1804,24 @@ registerIpcHandler('render-album', async (event, payload) => {
       rendered.push({ audioPath, outputPath: outputFinalPath });
     }
 
+    event.sender.send('render-status', { phase: 'finalizing' });
+    const finalizingRaw = (jobHasRealSignal && jobTotalMs > 0)
+      ? Math.max(0, Math.min(1, jobDoneMs / jobTotalMs))
+      : null;
+    event.sender.send('render-progress', {
+      trackIndex: Math.max(0, tracks.length - 1),
+      trackCount: Math.max(1, tracks.length),
+      phase: 'FINALIZING',
+      jobTotalMs,
+      jobDoneMs,
+      rawProgress: finalizingRaw,
+      hasRealSignal: jobHasRealSignal,
+      percentTrack: 99.9,
+      percentTotal: 99.9,
+      indeterminate: false,
+      isFinal: true,
+    });
+
     report.job.status = 'SUCCESS';
     report.job.reasonCode = '';
     report.job.humanMessage = 'Render completed successfully.';
@@ -1417,6 +1829,7 @@ registerIpcHandler('render-album', async (event, payload) => {
     report.job.durationMs = Date.now() - jobStartedAtMs;
     reportPath = writeRenderReport(exportFolder, report);
     sessionLogger?.info('render.success', { jobId, renderedCount: rendered.length, reportPath });
+    event.sender.send('render-status', { phase: 'success' });
 
     if (debugLogger?.path) currentJob.cleanupContext.stagingPaths.delete(debugLogger.path);
     return {

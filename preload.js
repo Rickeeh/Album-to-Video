@@ -20,13 +20,11 @@ async function invokeWithDebug(name, payload) {
 }
 
 contextBridge.exposeInMainWorld('api', {
-  // Temporary debug helper for invoke failures (remove after investigation window).
-  invoke: (name, payload) => invokeWithDebug(name, payload),
   selectAudios: () => invokeWithDebug('select-audios'),
   selectImage: () => invokeWithDebug('select-image'),
   selectFolder: () => invokeWithDebug('select-folder'),
 
-  ensureDir: (dirPath) => invokeWithDebug('ensure-dir', dirPath),
+  ensureDir: (payload) => invokeWithDebug('ensure-dir', payload),
   openFolder: (folderPath) => invokeWithDebug('open-folder', folderPath),
 
   readMetadata: (filePath) => invokeWithDebug('read-metadata', filePath),
@@ -37,6 +35,7 @@ contextBridge.exposeInMainWorld('api', {
 
   renderAlbum: (payload) => invokeWithDebug('render-album', payload),
   cancelRender: () => invokeWithDebug('cancel-render'),
+  exportDiagnostics: (payload) => invokeWithDebug('export-diagnostics', payload),
 
   onRenderProgress: (handler) => {
     const listener = (_evt, data) => handler(data);
