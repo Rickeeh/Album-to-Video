@@ -6,7 +6,7 @@ const os = require('os');
 const { spawn } = require('child_process');
 const { cleanupJob } = require('./src/main/cleanup');
 const { createSessionLogger } = require('./src/main/logger');
-const { exportDiagnosticsBundle, MAX_LOG_EVENTS } = require('./src/main/diagnostics');
+const { exportDiagnosticsBundle, MAX_LOG_EVENTS, redactSensitivePathSegments } = require('./src/main/diagnostics');
 const { getPreset, listPresets } = require('./src/main/presets');
 
 let mainWindow = null;
@@ -908,6 +908,100 @@ function listPartialOutputs(outputFolder) {
   }
 }
 
+function listPartialOutputsRecursive(baseDir, { maxDepth = 2, maxMatches = 25 } = {}) {
+  const root = String(baseDir || '');
+  if (!root || !fs.existsSync(root)) return [];
+  const out = [];
+  const walk = (dirPath, depth) => {
+    if (out.length >= maxMatches || depth > maxDepth) return;
+    let entries = [];
+    try {
+      entries = fs.readdirSync(dirPath, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (out.length >= maxMatches) return;
+      const entryPath = path.join(dirPath, entry.name);
+      if (entry.isFile() && String(entry.name || '').toLowerCase().endsWith('.partial')) {
+        out.push(entryPath);
+        continue;
+      }
+      if (entry.isDirectory()) walk(entryPath, depth + 1);
+    }
+  };
+  walk(root, 0);
+  return out;
+}
+
+function redactPathForLog(filePath) {
+  const raw = String(filePath || '');
+  if (!raw) return raw;
+  try {
+    return typeof redactSensitivePathSegments === 'function'
+      ? redactSensitivePathSegments(raw)
+      : raw;
+  } catch {
+    return raw;
+  }
+}
+
+function logStartupPartialArtifacts() {
+  const controlledRoots = new Set();
+  try {
+    controlledRoots.add(getAppLogDir());
+  } catch {}
+  if (!app.isPackaged) {
+    ['tmp', 'test-artifacts', 'fixtures'].forEach((relDir) => {
+      const full = path.join(__dirname, relDir);
+      try {
+        if (fs.existsSync(full) && fs.statSync(full).isDirectory()) {
+          controlledRoots.add(full);
+        }
+      } catch {}
+    });
+  }
+
+  const roots = [...controlledRoots];
+  if (roots.length === 0) return;
+
+  const perRoot = [];
+  const matches = [];
+  roots.forEach((rootPath) => {
+    const found = listPartialOutputsRecursive(rootPath, { maxDepth: 2, maxMatches: 25 });
+    perRoot.push({ root: redactPathForLog(rootPath), count: found.length });
+    found.forEach((filePath) => matches.push(filePath));
+  });
+
+  if (matches.length > 0) {
+    sessionLogger?.warn?.('startup.partial_found', {
+      partialCount: matches.length,
+      rootsScanned: roots.length,
+      examples: matches.slice(0, 5).map((p) => redactPathForLog(p)),
+      rootsWithMatches: perRoot.filter((item) => item.count > 0),
+    });
+  }
+}
+
+function movePartialToFinalOutput(partialPath, outputFinalPath, { jobId } = {}) {
+  try {
+    fs.renameSync(partialPath, outputFinalPath);
+    return { exdevFallback: false };
+  } catch (err) {
+    if (err?.code !== 'EXDEV') throw err;
+    fs.copyFileSync(partialPath, outputFinalPath);
+    const stat = fs.statSync(outputFinalPath);
+    if (!stat.isFile() || stat.size <= 0) {
+      const e = new Error(`EXDEV fallback produced invalid output: ${outputFinalPath}`);
+      e.code = REASON_CODES.UNCAUGHT;
+      throw e;
+    }
+    fs.unlinkSync(partialPath);
+    emitFinalizeStep(jobId, 'finalize.rename_outputs.exdev_fallback', { exdevFallback: true });
+    return { exdevFallback: true };
+  }
+}
+
 function emitFinalizeStep(jobId, step, extra = {}) {
   const payload = { jobId, ...extra };
   sessionLogger?.info?.(step, payload);
@@ -1126,6 +1220,13 @@ app.whenReady().then(() => {
           windowBounds: mainWindow?.getBounds?.() || null,
         });
       } catch {}
+      try {
+        logStartupPartialArtifacts();
+      } catch (err) {
+        sessionLogger?.warn?.('startup.partial_scan_failed', {
+          message: String(err?.message || err),
+        });
+      }
     } catch (err) {
       console.error('[session_logger_init_failed]', String(err?.message || err));
     }
@@ -1831,25 +1932,41 @@ registerIpcHandler('render-album', async (event, payload) => {
     });
 
     emitFinalizeStep(jobId, 'finalize.start', { exportFolder, trackCount: tracks.length });
+    const finalizeStartedAtMs = Date.now();
+    const finalizeSummary = {
+      renameMs: 0,
+      reportMs: 0,
+      cleanupMs: 0,
+      totalMs: 0,
+    };
 
     emitFinalizeStep(jobId, 'finalize.rename_outputs.start', { pendingCount: tracks.length });
+    const renameStartedAtMs = Date.now();
     let renamedCount = 0;
+    let exdevFallbackCount = 0;
     for (const trackPlan of tracks) {
       const partialPath = trackPlan.partialPath;
       const outputFinalPath = trackPlan.outputFinalPath;
       assertPathWithinBase(selectedExportFolder, partialPath, 'Partial output');
       assertPathWithinBase(selectedExportFolder, outputFinalPath, 'Final output');
       validatePartialOutput(partialPath);
-      fs.renameSync(partialPath, outputFinalPath);
+      const moveResult = movePartialToFinalOutput(partialPath, outputFinalPath, { jobId });
+      if (moveResult.exdevFallback) exdevFallbackCount += 1;
       currentJob.cleanupContext.partialPaths.delete(partialPath);
       currentJob.cleanupContext.tmpPaths.delete(partialPath);
       currentJob.cleanupContext.completedFinalOutputs.add(outputFinalPath);
       rendered.push({ audioPath: trackPlan.audioPath, outputPath: outputFinalPath });
       renamedCount += 1;
     }
-    emitFinalizeStep(jobId, 'finalize.rename_outputs.end', { renamedCount });
+    finalizeSummary.renameMs = Date.now() - renameStartedAtMs;
+    emitFinalizeStep(jobId, 'finalize.rename_outputs.end', {
+      renamedCount,
+      exdevFallback: exdevFallbackCount > 0,
+      exdevFallbackCount,
+    });
 
     emitFinalizeStep(jobId, 'finalize.write_report.start');
+    const reportStartedAtMs = Date.now();
 
     report.job.status = 'SUCCESS';
     report.job.reasonCode = '';
@@ -1857,9 +1974,11 @@ registerIpcHandler('render-album', async (event, payload) => {
     report.job.endTs = new Date().toISOString();
     report.job.durationMs = Date.now() - jobStartedAtMs;
     reportPath = writeRenderReport(exportFolder, report);
+    finalizeSummary.reportMs = Date.now() - reportStartedAtMs;
     emitFinalizeStep(jobId, 'finalize.write_report.end', { reportPath });
 
     emitFinalizeStep(jobId, 'finalize.cleanup.start');
+    const cleanupStartedAtMs = Date.now();
     const danglingPartials = listPartialOutputs(exportFolder);
     danglingPartials.forEach((partialPath) => {
       safeUnlink(partialPath);
@@ -1872,8 +1991,16 @@ registerIpcHandler('render-album', async (event, payload) => {
       e.code = REASON_CODES.UNCAUGHT;
       throw e;
     }
+    finalizeSummary.cleanupMs = Date.now() - cleanupStartedAtMs;
+    finalizeSummary.totalMs = Date.now() - finalizeStartedAtMs;
     emitFinalizeStep(jobId, 'finalize.cleanup.end', { removedPartialCount: danglingPartials.length });
-    emitFinalizeStep(jobId, 'finalize.end', { renderedCount: rendered.length, reportPath });
+    emitFinalizeStep(jobId, 'finalize.summary', {
+      renamedCount,
+      exdevFallback: exdevFallbackCount > 0,
+      exdevFallbackCount,
+      ...finalizeSummary,
+    });
+    emitFinalizeStep(jobId, 'finalize.end', { renderedCount: rendered.length, reportPath, ...finalizeSummary });
 
     sessionLogger?.info('render.success', { jobId, renderedCount: rendered.length, reportPath });
     event.sender.send('render-status', { phase: 'success' });

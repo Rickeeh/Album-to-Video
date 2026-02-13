@@ -79,8 +79,11 @@ function runProgressTruthPolicyTest() {
   const idxFinalizeReportEnd = source.indexOf("emitFinalizeStep(jobId, 'finalize.write_report.end'");
   const idxFinalizeCleanupStart = source.indexOf("emitFinalizeStep(jobId, 'finalize.cleanup.start'");
   const idxFinalizeCleanupEnd = source.indexOf("emitFinalizeStep(jobId, 'finalize.cleanup.end'");
+  const idxFinalizeSummary = source.indexOf("emitFinalizeStep(jobId, 'finalize.summary'");
   const idxFinalizeEnd = source.indexOf("emitFinalizeStep(jobId, 'finalize.end'");
   const idxRenderSuccessLog = source.indexOf("sessionLogger?.info('render.success'");
+  const idxExdevFallbackMark = source.indexOf("emitFinalizeStep(jobId, 'finalize.rename_outputs.exdev_fallback'");
+  const idxStartupPartialFound = source.indexOf("sessionLogger?.warn?.('startup.partial_found'");
   assertOk(idxFinalizingStatus >= 0, 'Progress truth: missing finalizing status emission.');
   assertOk(idxFinalizingProgress >= 0, 'Progress truth: missing finalizing progress emission.');
   assertOk(idxSuccessStatus >= 0, 'Progress truth: missing success status emission.');
@@ -96,8 +99,11 @@ function runProgressTruthPolicyTest() {
     idxFinalizeReportEnd,
     idxFinalizeCleanupStart,
     idxFinalizeCleanupEnd,
+    idxFinalizeSummary,
     idxFinalizeEnd,
     idxRenderSuccessLog,
+    idxExdevFallbackMark,
+    idxStartupPartialFound,
   ].forEach((idx) => assertOk(idx >= 0, 'Progress truth: missing finalize structured marks or render.success log.'));
   assertOk(
     idxFinalizeStart < idxFinalizeRenameStart
@@ -106,7 +112,8 @@ function runProgressTruthPolicyTest() {
     && idxFinalizeReportStart < idxFinalizeReportEnd
     && idxFinalizeReportEnd < idxFinalizeCleanupStart
     && idxFinalizeCleanupStart < idxFinalizeCleanupEnd
-    && idxFinalizeCleanupEnd < idxFinalizeEnd
+    && idxFinalizeCleanupEnd < idxFinalizeSummary
+    && idxFinalizeSummary < idxFinalizeEnd
     && idxFinalizeEnd < idxRenderSuccessLog
     && idxRenderSuccessLog < idxSuccessStatus,
     'Progress truth: expected finalize.* sequence before render.success and success status.'
