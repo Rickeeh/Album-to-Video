@@ -43,6 +43,33 @@ function payloadKeys(payload) {
   return Object.keys(payload);
 }
 
+function sanitizeUiLogPayload(payload) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return {};
+  const out = {};
+  for (const [key, value] of Object.entries(payload)) {
+    if (value === null || value === undefined) {
+      out[key] = value;
+      continue;
+    }
+    const t = typeof value;
+    if (t === 'string' || t === 'number' || t === 'boolean') {
+      out[key] = value;
+      continue;
+    }
+    if (Array.isArray(value)) {
+      out[key] = value.slice(0, 16).map((item) => {
+        const itemType = typeof item;
+        if (item === null || item === undefined) return item;
+        if (itemType === 'string' || itemType === 'number' || itemType === 'boolean') return item;
+        return `[${itemType}]`;
+      });
+      continue;
+    }
+    out[key] = `[${t}]`;
+  }
+  return out;
+}
+
 function logIpcHandlerFailure(methodName, err, payload) {
   const details = {
     code: 'IPC_HANDLER_FAILED',
@@ -1314,6 +1341,17 @@ ipcMain.on('perf-mark', (_event, payload) => {
   perfMark(mark, { source: 'renderer' });
 });
 
+ipcMain.on('ui-log', (_event, payload) => {
+  const levelRaw = String(payload?.level || 'info').toLowerCase();
+  const level = levelRaw === 'error' ? 'error' : (levelRaw === 'warn' ? 'warn' : 'info');
+  const event = String(payload?.event || '').trim() || 'ui.event';
+  const loggerFn = level === 'error'
+    ? sessionLogger?.error
+    : (level === 'warn' ? sessionLogger?.warn : sessionLogger?.info);
+  if (!loggerFn) return;
+  loggerFn.call(sessionLogger, event, sanitizeUiLogPayload(payload));
+});
+
 // ---------------- Metadata ----------------
 registerIpcHandler('read-metadata', async (_event, filePath) => {
   try {
@@ -1674,6 +1712,13 @@ function runFfmpegStillImage({
 }
 
 registerIpcHandler('render-album', async (event, payload) => {
+  const payloadObj = (payload && typeof payload === 'object' && !Array.isArray(payload)) ? payload : {};
+  sessionLogger?.info?.('ipc.render_album.received', {
+    hasPayload: Boolean(payload),
+    keys: payloadKeys(payloadObj),
+    trackCount: Array.isArray(payloadObj.tracks) ? payloadObj.tracks.length : 0,
+    jobIdPreview: `pending-${Date.now()}`,
+  });
   const { timeoutPerTrackMs, debug, createAlbumFolder } = payload || {};
 
   event.sender.send('render-status', { phase: 'planning' });

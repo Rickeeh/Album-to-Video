@@ -1085,6 +1085,41 @@
     return firstLine.replace(/^Error:\s*/i, '');
   }
 
+  function uiLog(event, payload = {}, level = 'info') {
+    const data = (payload && typeof payload === 'object' && !Array.isArray(payload)) ? payload : {};
+    const entry = { event, level, ...data };
+    const fn = level === 'error' ? console.error : (level === 'warn' ? console.warn : console.log);
+    fn('[ui]', entry);
+    try {
+      window.api?.logUiEvent?.(entry);
+    } catch {}
+  }
+
+  function buildReadyState() {
+    return {
+      hasTracks: tracks.length > 0,
+      hasCover: Boolean(imageFile),
+      hasExportFolder: Boolean(exportFolder),
+      presetKey: presetSelect.value,
+      createAlbumFolder: Boolean(createAlbumFolderEl.checked),
+      isRendering,
+      renderBtnDisabled: Boolean(renderBtn.disabled),
+    };
+  }
+
+  function summarizeRenderPayload(payload) {
+    return {
+      trackCount: Array.isArray(payload?.tracks) ? payload.tracks.length : 0,
+      hasCover: Boolean(payload?.imagePath),
+      hasExportFolder: Boolean(payload?.exportFolder),
+      presetKey: payload?.presetKey || '',
+      createAlbumFolder: Boolean(payload?.createAlbumFolder),
+      trackPreview: Array.isArray(payload?.tracks)
+        ? payload.tracks.slice(0, 3).map((t) => pathBasename(t.audioPath || ''))
+        : [],
+    };
+  }
+
   async function cancelRender() {
     if (!isRendering) return;
     await window.api.cancelRender();
@@ -1133,28 +1168,56 @@
   });
 
   async function renderAll() {
+    const readyState = buildReadyState();
+    uiLog('ui.export_click', readyState);
     if (isRendering) return;
 
-    if (!tracks.length) { showToast('Add audio files.', 'warn'); return; }
-    if (!imageFile) { showToast('Choose cover art.', 'warn'); return; }
-    if (!exportFolder) { showToast('Choose export folder.', 'warn'); return; }
+    if (typeof window.api?.renderAlbum !== 'function') {
+      const msg = 'Export failed — app API unavailable.';
+      uiLog('ui.export_failed', { reason: 'render_api_missing', ...readyState, message: msg }, 'error');
+      setStatus(msg, 2400);
+      showToast(msg, 'warn', 3200);
+      return;
+    }
+
+    if (!tracks.length) {
+      const msg = 'Add audio files.';
+      uiLog('ui.export_failed', { reason: 'missing_tracks', ...readyState, message: msg }, 'warn');
+      setStatus(msg, 1800);
+      showToast(msg, 'warn');
+      return;
+    }
+    if (!imageFile) {
+      const msg = 'Choose cover art.';
+      uiLog('ui.export_failed', { reason: 'missing_cover', ...readyState, message: msg }, 'warn');
+      setStatus(msg, 1800);
+      showToast(msg, 'warn');
+      return;
+    }
+    if (!exportFolder) {
+      const msg = 'Choose export folder.';
+      uiLog('ui.export_failed', { reason: 'missing_export_folder', ...readyState, message: msg }, 'warn');
+      setStatus(msg, 1800);
+      showToast(msg, 'warn');
+      return;
+    }
 
     const presetKey = presetSelect.value;
     const presetPolicy = selectedPresetPolicy();
     if (Number.isInteger(presetPolicy.maxTracks) && tracks.length > presetPolicy.maxTracks) {
-      showToast(`Selected preset allows up to ${presetPolicy.maxTracks} track(s).`, 'warn', 3500);
+      const msg = `Selected preset allows up to ${presetPolicy.maxTracks} track(s).`;
+      uiLog('ui.export_failed', { reason: 'preset_max_tracks', ...readyState, message: msg }, 'warn');
+      setStatus(msg, 3000);
+      showToast(msg, 'warn', 3500);
       return;
     }
+
     const toRender = [...tracks];
     renderQueue = toRender;
-
-    let finalExportFolder = exportFolder;
-    if (createAlbumFolderEl.checked) {
-      const safeAlbum = sanitizeFolderName(albumNameEl.value);
-      finalExportFolder = pathJoin(exportFolder, safeAlbum);
-      await window.api.ensureDir(finalExportFolder);
-    }
-    lastFinalExportFolder = finalExportFolder;
+    isRendering = true;
+    setUiLocked(true);
+    renderBtn.textContent = 'Exporting';
+    cancelBtn.disabled = false;
 
     showProgressUI();
     resetOverallProgress();
@@ -1162,39 +1225,47 @@
     btnOpenFolder.classList.add('isHidden');
     logsRow.classList.add('hidden');
     lastLogFolder = null;
-
-    isRendering = true;
-    setUiLocked(true);
-    renderBtn.textContent = 'Exporting';
-    cancelBtn.disabled = false;
-
     setStatus('Planning...');
 
-    const payload = {
-      tracks: toRender.map((t) => ({
-        audioPath: t.path,
-        outputBase: sanitizeFileBaseName(t.outputBase || t.originalBase),
-        trackNo: t.trackNo,
-        hasTrackNo: t.hasTrackNo,
-      })),
-      imagePath: imageFile,
-      exportFolder: finalExportFolder,
-      presetKey,
-      timeoutPerTrackMs: 30 * 60 * 1000,
-      createAlbumFolder: !!createAlbumFolderEl.checked,
-    };
-
     try {
+      let finalExportFolder = exportFolder;
+      if (createAlbumFolderEl.checked) {
+        const safeAlbum = sanitizeFolderName(albumNameEl.value);
+        finalExportFolder = await window.api.ensureDir({ albumFolderName: safeAlbum });
+      }
+      lastFinalExportFolder = finalExportFolder;
+
+      const payload = {
+        tracks: toRender.map((t) => ({
+          audioPath: t.path,
+          outputBase: sanitizeFileBaseName(t.outputBase || t.originalBase),
+          trackNo: t.trackNo,
+          hasTrackNo: t.hasTrackNo,
+        })),
+        imagePath: imageFile,
+        exportFolder: finalExportFolder,
+        presetKey,
+        timeoutPerTrackMs: 30 * 60 * 1000,
+        createAlbumFolder: !!createAlbumFolderEl.checked,
+      };
+      uiLog('ui.export_invoke', summarizeRenderPayload(payload));
+
       const res = await window.api.renderAlbum(payload);
       if (!res?.ok) {
         if (res?.error?.code === 'CANCELLED') {
+          uiLog('ui.export_failed', { reason: 'cancelled', code: 'CANCELLED' }, 'warn');
           hideProgressUI({ preserveStatus: true });
           setStatus('Cancelled', 1200);
           showToast('Export cancelled.', 'warn');
         } else {
           const msg = humanizeErrorMessage(res?.error?.message || 'Unknown error');
+          uiLog('ui.export_failed', {
+            reason: 'render_album_not_ok',
+            code: res?.error?.code || 'UNKNOWN',
+            message: msg,
+          }, 'error');
           hideProgressUI({ preserveStatus: true });
-          setStatus(`${msg} Ver logs.`);
+          setStatus('Export failed — check Logs');
           const reportFolder = pathDirname(res?.reportPath || '');
           if (reportFolder) {
             lastLogFolder = reportFolder;
@@ -1213,10 +1284,14 @@
       }
       btnOpenFolder.classList.remove('isHidden');
     } catch (err) {
-      console.error(err);
       const msg = humanizeErrorMessage(err?.message || err || 'Unknown error');
+      uiLog('ui.export_failed', {
+        reason: 'invoke_exception',
+        message: msg,
+        stack: String(err?.stack || ''),
+      }, 'error');
       hideProgressUI({ preserveStatus: true });
-      setStatus(`${msg} Ver logs.`);
+      setStatus('Export failed — check Logs');
       showToast(msg, 'warn', 5000);
     } finally {
       isRendering = false;

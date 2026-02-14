@@ -32,6 +32,7 @@ contextBridge.exposeInMainWorld('api', {
   listPresets: () => invokeWithDebug('list-presets'),
   dpiProbe: (payload) => invokeWithDebug('dpi-probe', payload),
   perfMark: (mark) => ipcRenderer.send('perf-mark', { mark }),
+  logUiEvent: (payload) => ipcRenderer.send('ui-log', payload),
 
   renderAlbum: (payload) => invokeWithDebug('render-album', payload),
   cancelRender: () => invokeWithDebug('cancel-render'),

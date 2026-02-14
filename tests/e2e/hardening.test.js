@@ -6,6 +6,7 @@ const { cleanupJob } = require('../../src/main/cleanup');
 
 const projectRoot = path.join(__dirname, '..', '..');
 const mainJsPath = path.join(projectRoot, 'main.js');
+const indexHtmlPath = path.join(projectRoot, 'index.html');
 
 function fail(message) {
   console.error(message);
@@ -142,6 +143,31 @@ function runProgressTruthPolicyTest() {
   );
 
   console.log('OK: progress truth policy keeps pre-success progress below 100 and finalizes before success');
+}
+
+function runRendererExportContractTest() {
+  const source = fs.readFileSync(indexHtmlPath, 'utf8');
+  assertOk(
+    !source.includes('window.api.invoke('),
+    'Renderer export contract: legacy window.api.invoke must not be used.'
+  );
+  assertOk(
+    source.includes('ui.export_click'),
+    'Renderer export contract: expected ui.export_click log.'
+  );
+  assertOk(
+    source.includes('ui.export_invoke'),
+    'Renderer export contract: expected ui.export_invoke log before IPC.'
+  );
+  assertOk(
+    source.includes('ui.export_failed'),
+    'Renderer export contract: expected ui.export_failed log for never-silent failures.'
+  );
+  assertOk(
+    source.includes('window.api.renderAlbum(payload)'),
+    'Renderer export contract: export path must invoke window.api.renderAlbum(payload).'
+  );
+  console.log('OK: renderer export contract uses explicit renderAlbum path with never-silent logs');
 }
 
 async function runCancelFinalizingCleanupTest() {
@@ -317,6 +343,7 @@ function runIpcPathHardeningTest() {
 
 (async () => {
   runProgressTruthPolicyTest();
+  runRendererExportContractTest();
   await runCancelFinalizingCleanupTest();
   runIpcPathHardeningTest();
   console.log('E2E hardening tests completed successfully');
