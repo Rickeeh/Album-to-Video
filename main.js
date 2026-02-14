@@ -1114,6 +1114,28 @@ function reasonCodeFromError(err) {
   return REASON_CODES.UNCAUGHT;
 }
 
+function computeJobExpectedWorkMs({
+  plannedJobTotalMs,
+  audioMode,
+  observedFirstSignalMs,
+  avgBytesPerSec,
+}) {
+  // Reserved for future tunings; kept explicit for deterministic signature.
+  void observedFirstSignalMs;
+  void avgBytesPerSec;
+
+  const planned = Math.max(0, Math.floor(Number(plannedJobTotalMs || 0)));
+  const mode = String(audioMode || '').toLowerCase() === 'copy' ? 'WALLCLOCK' : 'MEDIA';
+
+  if (mode === 'WALLCLOCK') {
+    const expected = Math.max(2500, Math.min(20000, Math.max(7000, Math.floor(planned * 0.01))));
+    return { progressModel: 'WALLCLOCK', jobExpectedWorkMs: expected };
+  }
+
+  const expected = planned > 0 ? planned : 7000;
+  return { progressModel: 'MEDIA', jobExpectedWorkMs: expected };
+}
+
 function sanitizePayload(payload) {
   const tracks = Array.isArray(payload?.tracks)
     ? payload.tracks.map((t) => ({
@@ -1494,6 +1516,7 @@ function runFfmpegStillImage({
   markHasRealSignal,
   audioMode,
   jobId,
+  jobStartedAtMs,
 }) {
   const log = typeof debugLog === 'function' ? debugLog : null;
   const outputForProgress = progressOutputPath || outputPath;
@@ -1538,7 +1561,7 @@ function runFfmpegStillImage({
     const PROGRESS_EMIT_THROTTLE_MS = 500;
     const SIZE_FALLBACK_START_MS = 800;
     const SIZE_FALLBACK_STALL_MS = 1500;
-    const SIZE_FALLBACK_POLL_MS = 300;
+    const SIZE_FALLBACK_POLL_MS = 500;
     let sizeFallbackActive = false;
     let sizeFallbackSamples = 0;
     let sizeFallbackUpdates = 0;
@@ -1546,6 +1569,14 @@ function runFfmpegStillImage({
     try {
       audioInputSizeBytes = Math.max(0, Number(fs.statSync(audioPath).size || 0));
     } catch {}
+    const modelInfo = computeJobExpectedWorkMs({
+      plannedJobTotalMs: safeJobTotalMs,
+      audioMode,
+      observedFirstSignalMs: null,
+      avgBytesPerSec: null,
+    });
+    const progressModel = modelInfo.progressModel;
+    const jobExpectedWorkMs = Math.max(1, Math.floor(Number(modelInfo.jobExpectedWorkMs || safeJobTotalMs || 7000)));
 
     const computePercentTrack = () => {
       if (!durationKnown || !lastOutTimeMs) return null;
@@ -1606,17 +1637,23 @@ function runFfmpegStillImage({
       percentTrack,
       phase,
       isFinal,
-      indeterminate,
       jobDoneMs,
       progressSignal,
       hasRealSignal,
+      nowMs,
     }) => {
+      const atMs = Number.isFinite(nowMs) ? nowMs : Date.now();
       const safeDoneMs = Math.max(0, Math.min(safeJobTotalMs, Math.floor(Number(jobDoneMs || 0))));
       const signal = ['time', 'size', 'both'].includes(progressSignal) ? progressSignal : 'none';
       const hasSignal = hasRealSignal === true;
-      const rawProgress = (hasSignal && safeJobTotalMs > 0)
-        ? Math.max(0, Math.min(1, safeDoneMs / safeJobTotalMs))
-        : null;
+      const safeJobStartedAtMs = Number.isFinite(jobStartedAtMs) ? Math.floor(jobStartedAtMs) : startedAtMs;
+      const jobElapsedMs = Math.max(0, atMs - safeJobStartedAtMs);
+      let rawProgress = null;
+      if (progressModel === 'WALLCLOCK') {
+        rawProgress = Math.max(0, Math.min(0.999, jobElapsedMs / jobExpectedWorkMs));
+      } else if (safeJobTotalMs > 0) {
+        rawProgress = Math.max(0, Math.min(0.999, safeDoneMs / safeJobTotalMs));
+      }
       const safePercentTrack = Math.max(0, Math.min(99.9, Number(percentTrack || 0)));
       const safePercentTotal = rawProgress === null
         ? 0
@@ -1628,13 +1665,17 @@ function runFfmpegStillImage({
         outputPath: outputForProgress,
         percentTrack: safePercentTrack,
         percentTotal: safePercentTotal,
-        indeterminate: Boolean(indeterminate),
+        indeterminate: false,
         isFinal: Boolean(isFinal),
         phase,
         jobTotalMs: safeJobTotalMs,
         jobDoneMs: safeDoneMs,
         hasRealSignal: hasSignal,
         progressSignal: signal,
+        progressModel,
+        jobStartedAtMs: safeJobStartedAtMs,
+        jobElapsedMs,
+        jobExpectedWorkMs,
         rawProgress,
       };
     };
@@ -1643,7 +1684,6 @@ function runFfmpegStillImage({
       isFinal = false,
       force = false,
       percentTrackOverride = null,
-      indeterminateOverride = null,
     } = {}) => {
       const nowMs = Date.now();
       if (!force && (nowMs - lastProgressEmitAtMs) < PROGRESS_EMIT_THROTTLE_MS) return;
@@ -1672,17 +1712,14 @@ function runFfmpegStillImage({
         }
       }
 
-      const indeterminate = indeterminateOverride === null
-        ? !hasSignal
-        : Boolean(indeterminateOverride);
       sendRenderProgress(event.sender, buildProgressPayload({
         percentTrack,
         phase,
         isFinal,
-        indeterminate,
         jobDoneMs: lastSentJobDoneMs,
         progressSignal,
         hasRealSignal: hasSignal || jobSignalSeen,
+        nowMs,
       }));
       lastProgressEmitAtMs = nowMs;
     };
@@ -1773,7 +1810,6 @@ function runFfmpegStillImage({
             isFinal: true,
             force: true,
             percentTrackOverride: 99.9,
-            indeterminateOverride: false,
           });
         }
       }
@@ -1819,6 +1855,8 @@ function runFfmpegStillImage({
         e.encodeMs = e.durationMs;
         e.ffmpegSpawnMs = firstProgressAtMs === null ? null : Math.max(0, firstProgressAtMs - ffmpegSpawnedAtMs);
         e.progressSignal = resolveProgressSignal(trackMaxOutTimeMs, sizeTrackProgressMs);
+        e.progressModel = progressModel;
+        e.jobExpectedWorkMs = jobExpectedWorkMs;
         reject(e);
         return;
       }
@@ -1840,6 +1878,8 @@ function runFfmpegStillImage({
           jobDoneMs: lastSentJobDoneMs,
           ffmpegSpawnMs: firstProgressAtMs === null ? null : Math.max(0, firstProgressAtMs - ffmpegSpawnedAtMs),
           progressSignal: resolveProgressSignal(trackMaxOutTimeMs, sizeTrackProgressMs),
+          progressModel,
+          jobExpectedWorkMs,
           sizeFallbackActive,
           sizeFallbackSamples,
           sizeFallbackUpdates,
@@ -1866,6 +1906,8 @@ function runFfmpegStillImage({
       e.encodeMs = e.durationMs;
       e.ffmpegSpawnMs = firstProgressAtMs === null ? null : Math.max(0, firstProgressAtMs - ffmpegSpawnedAtMs);
       e.progressSignal = resolveProgressSignal(trackMaxOutTimeMs, sizeTrackProgressMs);
+      e.progressModel = progressModel;
+      e.jobExpectedWorkMs = jobExpectedWorkMs;
       reject(e);
     };
 
@@ -1926,6 +1968,14 @@ registerIpcHandler('render-album', async (event, payload) => {
     const ms = Math.floor(Math.max(0, Number(t?.durationSec || 0)) * 1000);
     return sum + (Number.isFinite(ms) ? ms : 0);
   }, 0);
+  const initialModelInfo = computeJobExpectedWorkMs({
+    plannedJobTotalMs: jobTotalMs,
+    audioMode: 'copy',
+    observedFirstSignalMs: null,
+    avgBytesPerSec: null,
+  });
+  const jobProgressModels = new Set([initialModelInfo.progressModel]);
+  let lastObservedJobExpectedWorkMs = Math.max(1, Math.floor(Number(initialModelInfo.jobExpectedWorkMs || 7000)));
   let jobDoneMs = 0;
   let jobHasRealSignal = false;
   const jobProgressSignals = new Set();
@@ -2040,12 +2090,16 @@ registerIpcHandler('render-album', async (event, payload) => {
       phase: 'PREPARING',
       jobTotalMs,
       jobDoneMs: 0,
-      rawProgress: null,
+      rawProgress: 0,
       hasRealSignal: false,
       progressSignal: 'none',
+      progressModel: initialModelInfo.progressModel,
+      jobStartedAtMs: jobStartedAtMs,
+      jobElapsedMs: 0,
+      jobExpectedWorkMs: lastObservedJobExpectedWorkMs,
       percentTrack: 0,
       percentTotal: 0,
-      indeterminate: true,
+      indeterminate: false,
       isFinal: false,
     });
 
@@ -2091,6 +2145,8 @@ registerIpcHandler('render-album', async (event, payload) => {
         encodeMs: null,
         ffmpegSpawnMs: null,
         progressSignal: 'none',
+        progressModel: initialModelInfo.progressModel,
+        jobExpectedWorkMs: null,
       };
       report.tracks.push(trackReport);
 
@@ -2118,6 +2174,7 @@ registerIpcHandler('render-album', async (event, payload) => {
           markHasRealSignal: markJobHasRealSignal,
           audioMode: 'copy',
           jobId,
+          jobStartedAtMs,
         });
       } catch (err) {
         shouldFallback = (
@@ -2157,6 +2214,7 @@ registerIpcHandler('render-album', async (event, payload) => {
           markHasRealSignal: markJobHasRealSignal,
           audioMode: 'aac',
           jobId,
+          jobStartedAtMs,
         });
       }
 
@@ -2181,6 +2239,14 @@ registerIpcHandler('render-album', async (event, payload) => {
       trackReport.progressSignal = ['time', 'size', 'both'].includes(runResult?.progressSignal)
         ? runResult.progressSignal
         : 'none';
+      trackReport.progressModel = runResult?.progressModel === 'WALLCLOCK' ? 'WALLCLOCK' : 'MEDIA';
+      trackReport.jobExpectedWorkMs = Number.isFinite(Number(runResult?.jobExpectedWorkMs))
+        ? Math.max(1, Math.floor(Number(runResult.jobExpectedWorkMs)))
+        : null;
+      jobProgressModels.add(trackReport.progressModel);
+      if (trackReport.jobExpectedWorkMs) {
+        lastObservedJobExpectedWorkMs = trackReport.jobExpectedWorkMs;
+      }
       encodeMsTotal += encodeMs;
       if (Number.isFinite(ffmpegSpawnMs) && ffmpegSpawnMs >= 0) {
         ffmpegSpawnMsCount += 1;
@@ -2209,9 +2275,16 @@ registerIpcHandler('render-album', async (event, payload) => {
     }
 
     sendRenderStatus(event.sender, { phase: 'finalizing' });
-    const finalizingRaw = (jobHasRealSignal && jobTotalMs > 0)
-      ? Math.max(0, Math.min(0.999, jobDoneMs / jobTotalMs))
-      : null;
+    const finalizingAtMs = Date.now();
+    const finalProgressModel = jobProgressModels.has('MEDIA')
+      ? 'MEDIA'
+      : (jobProgressModels.has('WALLCLOCK') ? 'WALLCLOCK' : initialModelInfo.progressModel);
+    const finalJobExpectedWorkMs = finalProgressModel === 'WALLCLOCK'
+      ? Math.max(1, lastObservedJobExpectedWorkMs)
+      : Math.max(1, jobTotalMs || lastObservedJobExpectedWorkMs);
+    const finalizingRaw = finalProgressModel === 'WALLCLOCK'
+      ? Math.max(0, Math.min(0.999, (finalizingAtMs - jobStartedAtMs) / finalJobExpectedWorkMs))
+      : Math.max(0, Math.min(0.999, jobDoneMs / Math.max(1, jobTotalMs)));
     sendRenderProgress(event.sender, {
       trackIndex: Math.max(0, tracks.length - 1),
       trackCount: Math.max(1, tracks.length),
@@ -2221,6 +2294,10 @@ registerIpcHandler('render-album', async (event, payload) => {
       rawProgress: finalizingRaw,
       hasRealSignal: jobHasRealSignal,
       progressSignal: getJobProgressSignal(),
+      progressModel: finalProgressModel,
+      jobStartedAtMs,
+      jobElapsedMs: Math.max(0, finalizingAtMs - jobStartedAtMs),
+      jobExpectedWorkMs: finalJobExpectedWorkMs,
       percentTrack: 99.9,
       percentTotal: 99.9,
       indeterminate: false,

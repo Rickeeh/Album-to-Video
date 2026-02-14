@@ -510,13 +510,10 @@
   let presetCatalog = [];
   let defaultPresetKey = 'album_ep';
   let statusResetTimer = null;
-  let progressMode = 'DETERMINATE';
   let progressDisplay = 0;
   let progressTarget = 0;
   let progressRafId = null;
   let progressLastFrameTs = 0;
-  let indeterminateTimer = null;
-  let indeterminatePhase = 0;
   let lastVisualProgress = 0;
   let hasDeterminateSignal = false;
   let lastProgressSignal = 'none';
@@ -586,35 +583,6 @@
     progressRafId = null;
   }
 
-  function stopIndeterminateTimer() {
-    if (!indeterminateTimer) return;
-    clearInterval(indeterminateTimer);
-    indeterminateTimer = null;
-  }
-
-  function startIndeterminateTimer() {
-    if (indeterminateTimer) return;
-    indeterminateTimer = setInterval(() => {
-      if (!isRendering || progressMode !== 'INDETERMINATE') return;
-      indeterminatePhase = (indeterminatePhase + 1) % 60;
-      const wave = (Math.sin(indeterminatePhase / 60 * Math.PI * 2) + 1) / 2;
-      const widthPct = 18 + wave * 24;
-      totalFill.style.width = `${widthPct.toFixed(1)}%`;
-      overallPercent.textContent = '--';
-      lastVisualProgress = clamp01(widthPct / 100);
-    }, 100);
-  }
-
-  function setProgressMode(mode) {
-    progressMode = mode === 'INDETERMINATE' ? 'INDETERMINATE' : 'DETERMINATE';
-    if (progressMode === 'INDETERMINATE') {
-      stopProgressRaf();
-      startIndeterminateTimer();
-      return;
-    }
-    stopIndeterminateTimer();
-  }
-
   function tickProgress(nowTs) {
     const now = Number(nowTs) || performance.now();
     const prev = progressLastFrameTs || now;
@@ -627,7 +595,7 @@
     applyDeterminateProgress(progressDisplay);
 
     const stable = Math.abs(progressTarget - progressDisplay) < 0.0001;
-    if (stable || !isRendering || progressMode !== 'DETERMINATE') {
+    if (stable || !isRendering) {
       progressRafId = null;
       return;
     }
@@ -635,13 +603,12 @@
   }
 
   function startProgressRaf() {
-    if (progressRafId || progressMode !== 'DETERMINATE') return;
+    if (progressRafId) return;
     progressLastFrameTs = performance.now();
     progressRafId = requestAnimationFrame(tickProgress);
   }
 
   function completeProgressNow() {
-    setProgressMode('DETERMINATE');
     progressTarget = 1;
     progressDisplay = 1;
     hasDeterminateSignal = true;
@@ -652,12 +619,9 @@
 
   function resetOverallProgress() {
     stopProgressRaf();
-    stopIndeterminateTimer();
-    progressMode = 'DETERMINATE';
     progressDisplay = 0;
     progressTarget = 0;
     progressLastFrameTs = 0;
-    indeterminatePhase = 0;
     lastVisualProgress = 0;
     hasDeterminateSignal = false;
     lastProgressSignal = 'none';
@@ -1160,15 +1124,8 @@
     else if (phase === 'ENCODING' || phase === 'RENDERING') setStatus('Rendering...');
     else if (phase === 'FINALIZING') setStatus('Finalizing...');
 
-    const hasRealSignal = (progressSignal !== 'none') || data.hasRealSignal === true;
     const raw = Number(data.rawProgress);
     const hasValidRaw = Number.isFinite(raw) && raw >= 0 && raw <= 1;
-    if (!hasRealSignal || progressSignal === 'none') {
-      setProgressMode('INDETERMINATE');
-      return;
-    }
-
-    setProgressMode('DETERMINATE');
     if (!hasDeterminateSignal) {
       const visualFloor = Math.min(0.15, Math.max(lastVisualProgress, readCurrentFillProgress()));
       progressDisplay = Math.max(progressDisplay, visualFloor);
@@ -1196,8 +1153,13 @@
         setStatus('Planning...');
       } else if (normalized === 'rendering') {
         setStatus('Rendering...');
+        progressDisplay = 0;
+        progressTarget = 0;
+        applyDeterminateProgress(0);
       } else if (normalized === 'finalizing') {
         setStatus('Finalizing...');
+        progressTarget = Math.max(progressTarget, 0.99, progressDisplay);
+        startProgressRaf();
       } else if (normalized === 'success') {
         completeProgressNow();
         setStatus('Done');
