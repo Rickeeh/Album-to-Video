@@ -12,6 +12,10 @@ const { getPreset, listPresets } = require('./src/main/presets');
 let mainWindow = null;
 let sessionLogger = null;
 let lastSelectedExportFolder = null;
+const RENDER_SIGNAL_TAIL_MAX = 200;
+const renderSignalTail = [];
+let latestStartupPartialScan = null;
+let latestFinalizeSummary = null;
 
 if (process.platform === 'win32') {
   try {
@@ -68,6 +72,34 @@ function sanitizeUiLogPayload(payload) {
     out[key] = `[${t}]`;
   }
   return out;
+}
+
+function recordRenderSignal(kind, payload) {
+  const safeKind = kind === 'status' ? 'status' : 'progress';
+  const safePayload = sanitizeUiLogPayload(payload || {});
+  renderSignalTail.push({
+    ts: new Date().toISOString(),
+    kind: safeKind,
+    payload: safePayload,
+  });
+  if (renderSignalTail.length > RENDER_SIGNAL_TAIL_MAX) {
+    renderSignalTail.splice(0, renderSignalTail.length - RENDER_SIGNAL_TAIL_MAX);
+  }
+}
+
+function getRenderSignalsTail(maxEvents = RENDER_SIGNAL_TAIL_MAX) {
+  const limit = Math.max(1, Math.min(RENDER_SIGNAL_TAIL_MAX, Number(maxEvents) || RENDER_SIGNAL_TAIL_MAX));
+  return renderSignalTail.slice(-limit);
+}
+
+function sendRenderStatus(sender, payload) {
+  recordRenderSignal('status', payload);
+  sender.send('render-status', payload);
+}
+
+function sendRenderProgress(sender, payload) {
+  recordRenderSignal('progress', payload);
+  sender.send('render-progress', payload);
 }
 
 function logIpcHandlerFailure(methodName, err, payload) {
@@ -1000,12 +1032,14 @@ function logStartupPartialArtifacts() {
     found.forEach((filePath) => matches.push(filePath));
   });
 
-  sessionLogger?.info?.('startup.partial_scan', {
+  const scanPayload = {
     foundCount: matches.length,
     rootsScanned: roots.length,
     examples: matches.slice(0, 5).map((p) => redactPathForLog(p)),
     rootsWithMatches: perRoot.filter((item) => item.count > 0),
-  });
+  };
+  latestStartupPartialScan = scanPayload;
+  sessionLogger?.info?.('startup.partial_scan', scanPayload);
 }
 
 function movePartialToFinalOutput(partialPath, outputFinalPath) {
@@ -1028,6 +1062,9 @@ function movePartialToFinalOutput(partialPath, outputFinalPath) {
 
 function emitFinalizeStep(jobId, step, extra = {}) {
   const payload = { jobId, ...extra };
+  if (step === 'finalize.summary') {
+    latestFinalizeSummary = payload;
+  }
   sessionLogger?.info?.(step, payload);
   perfMark(step, payload);
 }
@@ -1431,6 +1468,9 @@ registerIpcHandler('export-diagnostics', async (_event, payload) => {
     renderReportPath,
     pinnedWinBinaryHashes: getPinnedWinBinaryHashes(),
     maxLogEvents: MAX_LOG_EVENTS,
+    startupPartialScan: latestStartupPartialScan,
+    finalizeSummary: latestFinalizeSummary,
+    progressStatusTail: getRenderSignalsTail(MAX_LOG_EVENTS),
   });
   sessionLogger?.info?.('diagnostics.exported', { diagnosticsPath, requestedExportFolder: requestedExportFolder || null });
   return { ok: true, diagnosticsPath };
@@ -1489,9 +1529,23 @@ function runFfmpegStillImage({
     const startedAt = new Date(startedAtMs).toISOString();
     let lastOutTimeMs = 0;
     let trackMaxOutTimeMs = 0;
+    let sizeTrackProgressMs = 0;
+    let lastOutTimeUpdateAtMs = 0;
     let lastSentJobDoneMs = jobDoneBaseMs;
+    let lastProgressEmitAtMs = 0;
     let speedEwma = 0;
     const speedAlpha = 0.25;
+    const PROGRESS_EMIT_THROTTLE_MS = 500;
+    const SIZE_FALLBACK_START_MS = 800;
+    const SIZE_FALLBACK_STALL_MS = 1500;
+    const SIZE_FALLBACK_POLL_MS = 300;
+    let sizeFallbackActive = false;
+    let sizeFallbackSamples = 0;
+    let sizeFallbackUpdates = 0;
+    let audioInputSizeBytes = 0;
+    try {
+      audioInputSizeBytes = Math.max(0, Number(fs.statSync(audioPath).size || 0));
+    } catch {}
 
     const computePercentTrack = () => {
       if (!durationKnown || !lastOutTimeMs) return null;
@@ -1504,16 +1558,63 @@ function runFfmpegStillImage({
       }
       return Math.min(99.9, Math.max(0, pct));
     };
+    const resolveProgressSignal = (timeTrackMs, sizeTrackMs) => {
+      const hasTime = Number.isFinite(timeTrackMs) && timeTrackMs > 0;
+      const hasSize = Number.isFinite(sizeTrackMs) && sizeTrackMs > 0;
+      if (hasTime && hasSize) return 'both';
+      if (hasTime) return 'time';
+      if (hasSize) return 'size';
+      return 'none';
+    };
+    const markSignalVisible = (progressSignal) => {
+      if (typeof markHasRealSignal !== 'function') return;
+      if (progressSignal === 'both') {
+        markHasRealSignal('time');
+        markHasRealSignal('size');
+        return;
+      }
+      if (progressSignal === 'time' || progressSignal === 'size') {
+        markHasRealSignal(progressSignal);
+      }
+    };
+    const shouldUseSizeFallback = (nowMs) => {
+      if (!durationKnown || durationMs <= 0 || audioInputSizeBytes <= 0) return false;
+      if ((nowMs - startedAtMs) < SIZE_FALLBACK_START_MS) return false;
+      if (trackMaxOutTimeMs <= 0) return true;
+      if (lastOutTimeUpdateAtMs <= 0) return true;
+      return (nowMs - lastOutTimeUpdateAtMs) > SIZE_FALLBACK_STALL_MS;
+    };
+    const refreshSizeProgress = (nowMs) => {
+      if (!shouldUseSizeFallback(nowMs)) return sizeTrackProgressMs;
+      sizeFallbackActive = true;
+      sizeFallbackSamples += 1;
+      try {
+        const stat = fs.statSync(outputPath);
+        if (!stat.isFile()) return sizeTrackProgressMs;
+        const writtenBytes = Math.max(0, Number(stat.size || 0));
+        if (writtenBytes <= 0) return sizeTrackProgressMs;
+        const ratio = Math.max(0, Math.min(0.999, writtenBytes / audioInputSizeBytes));
+        const derivedMs = Math.max(0, Math.floor(durationMs * ratio));
+        if (derivedMs > sizeTrackProgressMs) {
+          sizeTrackProgressMs = derivedMs;
+          sizeFallbackUpdates += 1;
+        }
+      } catch {}
+      return sizeTrackProgressMs;
+    };
     const buildProgressPayload = ({
       percentTrack,
       phase,
       isFinal,
       indeterminate,
       jobDoneMs,
+      progressSignal,
+      hasRealSignal,
     }) => {
       const safeDoneMs = Math.max(0, Math.min(safeJobTotalMs, Math.floor(Number(jobDoneMs || 0))));
-      const hasRealSignal = typeof getHasRealSignal === 'function' && getHasRealSignal() === true;
-      const rawProgress = (hasRealSignal && safeJobTotalMs > 0)
+      const signal = ['time', 'size', 'both'].includes(progressSignal) ? progressSignal : 'none';
+      const hasSignal = hasRealSignal === true;
+      const rawProgress = (hasSignal && safeJobTotalMs > 0)
         ? Math.max(0, Math.min(1, safeDoneMs / safeJobTotalMs))
         : null;
       const safePercentTrack = Math.max(0, Math.min(99.9, Number(percentTrack || 0)));
@@ -1532,9 +1633,58 @@ function runFfmpegStillImage({
         phase,
         jobTotalMs: safeJobTotalMs,
         jobDoneMs: safeDoneMs,
-        hasRealSignal,
+        hasRealSignal: hasSignal,
+        progressSignal: signal,
         rawProgress,
       };
+    };
+    const emitProgressSnapshot = ({
+      phase = 'ENCODING',
+      isFinal = false,
+      force = false,
+      percentTrackOverride = null,
+      indeterminateOverride = null,
+    } = {}) => {
+      const nowMs = Date.now();
+      if (!force && (nowMs - lastProgressEmitAtMs) < PROGRESS_EMIT_THROTTLE_MS) return;
+      const sizeMs = refreshSizeProgress(nowMs);
+      let trackDoneMs = Math.max(trackMaxOutTimeMs, sizeMs);
+      if (durationKnown && durationMs > 0) {
+        trackDoneMs = Math.max(0, Math.min(durationMs, trackDoneMs));
+      }
+      const trackSignal = resolveProgressSignal(trackMaxOutTimeMs, sizeMs);
+      const jobSignalSeen = typeof getHasRealSignal === 'function' && getHasRealSignal() === true;
+      const progressSignal = trackSignal === 'none' && jobSignalSeen ? 'time' : trackSignal;
+      const hasSignal = progressSignal !== 'none';
+      if (trackSignal !== 'none') {
+        markSignalVisible(trackSignal);
+        if (firstProgressAtMs === null) firstProgressAtMs = nowMs;
+      }
+      const doneMs = jobDoneBaseMs + trackDoneMs;
+      lastSentJobDoneMs = Math.max(lastSentJobDoneMs, doneMs);
+
+      let percentTrack = Number(percentTrackOverride);
+      if (!Number.isFinite(percentTrack)) {
+        if (durationKnown && durationMs > 0) {
+          percentTrack = Math.min(99.9, Math.max(0, (trackDoneMs / durationMs) * 100));
+        } else {
+          percentTrack = computePercentTrack() || 0;
+        }
+      }
+
+      const indeterminate = indeterminateOverride === null
+        ? !hasSignal
+        : Boolean(indeterminateOverride);
+      sendRenderProgress(event.sender, buildProgressPayload({
+        percentTrack,
+        phase,
+        isFinal,
+        indeterminate,
+        jobDoneMs: lastSentJobDoneMs,
+        progressSignal,
+        hasRealSignal: hasSignal || jobSignalSeen,
+      }));
+      lastProgressEmitAtMs = nowMs;
     };
     const args = [
       ...baseArgs,
@@ -1565,6 +1715,8 @@ function runFfmpegStillImage({
       detached: false,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
+    const ffmpegSpawnedAtMs = Date.now();
+    let firstProgressAtMs = null;
 
     currentJob.ffmpeg = ff;
     if (currentJob.cleanupContext) {
@@ -1594,49 +1746,47 @@ function runFfmpegStillImage({
           if (Number.isFinite(v) && v > 0) {
             speedEwma = speedEwma ? (speedEwma * (1 - speedAlpha) + v * speedAlpha) : v;
           }
-        } else if (line.startsWith('out_time_ms=')) {
-          const v = parseInt(line.split('=')[1], 10);
-          if (Number.isFinite(v)) {
-            lastOutTimeMs = v;
-            trackMaxOutTimeMs = Math.max(trackMaxOutTimeMs, Math.max(0, v));
-            if (trackMaxOutTimeMs > 0 && typeof markHasRealSignal === 'function') {
-              markHasRealSignal();
-            }
-            const doneMs = jobDoneBaseMs + trackMaxOutTimeMs;
-            lastSentJobDoneMs = doneMs;
-            if (durationKnown) {
-              const pctTrack = computePercentTrack();
-              event.sender.send('render-progress', buildProgressPayload({
-                percentTrack: pctTrack || 0,
-                phase: 'ENCODING',
-                isFinal: false,
-                indeterminate: false,
-                jobDoneMs: doneMs,
-              }));
-            } else {
-              event.sender.send('render-progress', buildProgressPayload({
-                percentTrack: 0,
-                phase: 'ENCODING',
-                isFinal: false,
-                indeterminate: true,
-                jobDoneMs: doneMs,
-              }));
-            }
+        } else if (line.startsWith('out_time_ms=') || line.startsWith('out_time_us=')) {
+          const raw = line.split('=')[1];
+          let valueMs = Number.NaN;
+          if (line.startsWith('out_time_ms=')) {
+            valueMs = parseInt(raw, 10);
+          } else {
+            const micros = parseInt(raw, 10);
+            valueMs = Number.isFinite(micros) ? Math.floor(micros / 1000) : Number.NaN;
+          }
+          if (Number.isFinite(valueMs)) {
+            const safeMs = Math.max(0, valueMs);
+            lastOutTimeMs = safeMs;
+            trackMaxOutTimeMs = Math.max(trackMaxOutTimeMs, safeMs);
+            lastOutTimeUpdateAtMs = Date.now();
+            emitProgressSnapshot({
+              phase: 'ENCODING',
+              isFinal: false,
+              force: false,
+            });
           }
         } else if (line === 'progress=end') {
-          const doneMs = jobDoneBaseMs + trackMaxOutTimeMs;
-          lastSentJobDoneMs = doneMs;
           const isLastTrack = trackIndex === (safeTrackCount - 1);
-          event.sender.send('render-progress', buildProgressPayload({
-            percentTrack: 99.9,
+          emitProgressSnapshot({
             phase: isLastTrack ? 'FINALIZING' : 'ENCODING',
             isFinal: true,
-            indeterminate: false,
-            jobDoneMs: doneMs,
-          }));
+            force: true,
+            percentTrackOverride: 99.9,
+            indeterminateOverride: false,
+          });
         }
       }
     });
+
+    const progressTicker = setInterval(() => {
+      if (currentJob.cancelled) return;
+      emitProgressSnapshot({
+        phase: 'ENCODING',
+        isFinal: false,
+        force: false,
+      });
+    }, SIZE_FALLBACK_POLL_MS);
 
     ff.stderr.setEncoding('utf8');
     ff.stderr.on('data', (chunk) => {
@@ -1649,6 +1799,7 @@ function runFfmpegStillImage({
 
     const finalize = (ok, codeOrErr) => {
       clearTimeout(timeout);
+      clearInterval(progressTicker);
       currentJob.ffmpeg = null;
 
       const endedAtMs = Date.now();
@@ -1665,6 +1816,9 @@ function runFfmpegStillImage({
         e.startTs = startedAt;
         e.endTs = endedAt;
         e.durationMs = endedAtMs - startedAtMs;
+        e.encodeMs = e.durationMs;
+        e.ffmpegSpawnMs = firstProgressAtMs === null ? null : Math.max(0, firstProgressAtMs - ffmpegSpawnedAtMs);
+        e.progressSignal = resolveProgressSignal(trackMaxOutTimeMs, sizeTrackProgressMs);
         reject(e);
         return;
       }
@@ -1681,8 +1835,14 @@ function runFfmpegStillImage({
           startTs: startedAt,
           endTs: endedAt,
           durationMs: endedAtMs - startedAtMs,
+          encodeMs: endedAtMs - startedAtMs,
           durationSec: dSec,
           jobDoneMs: lastSentJobDoneMs,
+          ffmpegSpawnMs: firstProgressAtMs === null ? null : Math.max(0, firstProgressAtMs - ffmpegSpawnedAtMs),
+          progressSignal: resolveProgressSignal(trackMaxOutTimeMs, sizeTrackProgressMs),
+          sizeFallbackActive,
+          sizeFallbackSamples,
+          sizeFallbackUpdates,
         });
         return;
       }
@@ -1703,6 +1863,9 @@ function runFfmpegStillImage({
       e.startTs = startedAt;
       e.endTs = endedAt;
       e.durationMs = endedAtMs - startedAtMs;
+      e.encodeMs = e.durationMs;
+      e.ffmpegSpawnMs = firstProgressAtMs === null ? null : Math.max(0, firstProgressAtMs - ffmpegSpawnedAtMs);
+      e.progressSignal = resolveProgressSignal(trackMaxOutTimeMs, sizeTrackProgressMs);
       reject(e);
     };
 
@@ -1721,7 +1884,7 @@ registerIpcHandler('render-album', async (event, payload) => {
   });
   const { timeoutPerTrackMs, debug, createAlbumFolder } = payload || {};
 
-  event.sender.send('render-status', { phase: 'planning' });
+  sendRenderStatus(event.sender, { phase: 'planning' });
   const plan = await buildRenderPlan(payload);
 
   const jobId = plan.jobId;
@@ -1765,8 +1928,26 @@ registerIpcHandler('render-album', async (event, payload) => {
   }, 0);
   let jobDoneMs = 0;
   let jobHasRealSignal = false;
-  const markJobHasRealSignal = () => { jobHasRealSignal = true; };
+  const jobProgressSignals = new Set();
+  let encodeMsTotal = 0;
+  let ffmpegSpawnMsCount = 0;
+  let ffmpegSpawnMsTotal = 0;
+  let ffmpegSpawnMsMin = null;
+  let ffmpegSpawnMsMax = null;
+  const markJobHasRealSignal = (signal) => {
+    jobHasRealSignal = true;
+    const safe = String(signal || '').toLowerCase();
+    if (safe === 'time' || safe === 'size') jobProgressSignals.add(safe);
+  };
   const getJobHasRealSignal = () => jobHasRealSignal;
+  const getJobProgressSignal = () => {
+    const hasTime = jobProgressSignals.has('time');
+    const hasSize = jobProgressSignals.has('size');
+    if (hasTime && hasSize) return 'both';
+    if (hasTime) return 'time';
+    if (hasSize) return 'size';
+    return 'none';
+  };
   const jobStartedAtMs = Date.now();
   const report = {
     appVersion: app.getVersion(),
@@ -1799,8 +1980,43 @@ registerIpcHandler('render-album', async (event, payload) => {
       cleanupDeletedFinalCount: 0,
       cleanupRemovedEmptyFolder: false,
     },
+    perf: {
+      jobTotalMs,
+      jobDoneMs: 0,
+      hasRealSignal: false,
+      encodeMsTotal: 0,
+      finalizeMs: null,
+      ffmpegSpawnMs: {
+        count: 0,
+        min: null,
+        max: null,
+        avg: null,
+      },
+      finalizeSummary: null,
+    },
   };
   let reportPath = null;
+  const updatePerfSnapshot = ({ finalizeSummary = null, finalizeMs = null } = {}) => {
+    const avg = ffmpegSpawnMsCount > 0 ? Math.round(ffmpegSpawnMsTotal / ffmpegSpawnMsCount) : null;
+    const safeFinalizeMs = Number.isFinite(finalizeMs) && finalizeMs >= 0
+      ? Math.floor(finalizeMs)
+      : report.perf.finalizeMs;
+    report.perf = {
+      ...report.perf,
+      jobTotalMs,
+      jobDoneMs: Math.max(0, Math.floor(jobDoneMs)),
+      hasRealSignal: Boolean(jobHasRealSignal),
+      encodeMsTotal: Math.max(0, Math.floor(encodeMsTotal)),
+      finalizeMs: safeFinalizeMs,
+      ffmpegSpawnMs: {
+        count: ffmpegSpawnMsCount,
+        min: ffmpegSpawnMsMin,
+        max: ffmpegSpawnMsMax,
+        avg,
+      },
+      finalizeSummary: finalizeSummary ? { ...finalizeSummary } : report.perf.finalizeSummary,
+    };
+  };
 
   try {
     if (debug) {
@@ -1809,7 +2025,7 @@ registerIpcHandler('render-album', async (event, payload) => {
       currentJob.cleanupContext.stagingClosers.add(() => debugLogger.close());
     }
     sessionLogger?.info('render.start', { jobId, trackCount: tracks.length, exportFolder });
-    event.sender.send('render-status', { phase: 'rendering' });
+    sendRenderStatus(event.sender, { phase: 'rendering' });
     if (jobTotalMs <= 0) {
       sessionLogger?.warn('progress.job_total_missing', {
         jobId,
@@ -1818,7 +2034,7 @@ registerIpcHandler('render-album', async (event, payload) => {
         jobTotalMs,
       });
     }
-    event.sender.send('render-progress', {
+    sendRenderProgress(event.sender, {
       trackIndex: 0,
       trackCount: Math.max(1, tracks.length),
       phase: 'PREPARING',
@@ -1826,6 +2042,7 @@ registerIpcHandler('render-album', async (event, payload) => {
       jobDoneMs: 0,
       rawProgress: null,
       hasRealSignal: false,
+      progressSignal: 'none',
       percentTrack: 0,
       percentTotal: 0,
       indeterminate: true,
@@ -1871,12 +2088,16 @@ registerIpcHandler('render-album', async (event, payload) => {
         stderrTail: '',
         audioMode: 'copy',
         fallbackReason: null,
+        encodeMs: null,
+        ffmpegSpawnMs: null,
+        progressSignal: 'none',
       };
       report.tracks.push(trackReport);
 
       let runResult = null;
       let shouldFallback = false;
       let fallbackReason = null;
+      let fallbackEncodeMs = 0;
 
       try {
         runResult = await runFfmpegStillImage({
@@ -1907,6 +2128,8 @@ registerIpcHandler('render-album', async (event, payload) => {
         if (!shouldFallback) throw err;
 
         fallbackReason = extractFallbackReason(err?.stderr || err?.stderrTail);
+        const failedEncodeMs = Number(err?.encodeMs ?? err?.durationMs);
+        fallbackEncodeMs = Number.isFinite(failedEncodeMs) && failedEncodeMs > 0 ? failedEncodeMs : 0;
         sessionLogger?.warn('render.audio_copy_fallback', { jobId, trackIndex: i, fallbackReason });
         if (debugLogger) debugLogger.log(`[fallback] track=${i + 1} reason=${fallbackReason}`);
         safeUnlink(partialPath);
@@ -1945,7 +2168,37 @@ registerIpcHandler('render-album', async (event, payload) => {
       trackReport.durationMs = runResult.durationMs;
       trackReport.exitCode = runResult.exitCode;
       trackReport.stderrTail = runResult.stderrTail;
+      const runEncodeMs = Number(runResult?.encodeMs ?? runResult?.durationMs);
+      const encodeMs = Math.max(0, Math.floor(
+        (Number.isFinite(runEncodeMs) && runEncodeMs > 0 ? runEncodeMs : 0) + fallbackEncodeMs
+      ));
+      const spawnMsRaw = Number(runResult?.ffmpegSpawnMs);
+      const ffmpegSpawnMs = Number.isFinite(spawnMsRaw) && spawnMsRaw >= 0
+        ? Math.floor(spawnMsRaw)
+        : null;
+      trackReport.encodeMs = encodeMs;
+      trackReport.ffmpegSpawnMs = ffmpegSpawnMs;
+      trackReport.progressSignal = ['time', 'size', 'both'].includes(runResult?.progressSignal)
+        ? runResult.progressSignal
+        : 'none';
+      encodeMsTotal += encodeMs;
+      if (Number.isFinite(ffmpegSpawnMs) && ffmpegSpawnMs >= 0) {
+        ffmpegSpawnMsCount += 1;
+        ffmpegSpawnMsTotal += ffmpegSpawnMs;
+        ffmpegSpawnMsMin = ffmpegSpawnMsMin === null ? ffmpegSpawnMs : Math.min(ffmpegSpawnMsMin, ffmpegSpawnMs);
+        ffmpegSpawnMsMax = ffmpegSpawnMsMax === null ? ffmpegSpawnMs : Math.max(ffmpegSpawnMsMax, ffmpegSpawnMs);
+      }
       jobDoneMs = Math.max(jobDoneMs, Math.floor(Number(runResult?.jobDoneMs || 0)));
+      sessionLogger?.info?.('render.track_perf', {
+        jobId,
+        trackIndex: i,
+        trackCount: tracks.length,
+        encodeMs,
+        ffmpegSpawnMs,
+        progressSignal: trackReport.progressSignal,
+        audioMode: trackReport.audioMode,
+      });
+      updatePerfSnapshot();
 
       validatePartialOutput(partialPath);
       currentJob.cleanupContext.currentTrackPartialPath = null;
@@ -1955,11 +2208,11 @@ registerIpcHandler('render-album', async (event, payload) => {
       }
     }
 
-    event.sender.send('render-status', { phase: 'finalizing' });
+    sendRenderStatus(event.sender, { phase: 'finalizing' });
     const finalizingRaw = (jobHasRealSignal && jobTotalMs > 0)
       ? Math.max(0, Math.min(0.999, jobDoneMs / jobTotalMs))
       : null;
-    event.sender.send('render-progress', {
+    sendRenderProgress(event.sender, {
       trackIndex: Math.max(0, tracks.length - 1),
       trackCount: Math.max(1, tracks.length),
       phase: 'FINALIZING',
@@ -1967,6 +2220,7 @@ registerIpcHandler('render-album', async (event, payload) => {
       jobDoneMs,
       rawProgress: finalizingRaw,
       hasRealSignal: jobHasRealSignal,
+      progressSignal: getJobProgressSignal(),
       percentTrack: 99.9,
       percentTotal: 99.9,
       indeterminate: false,
@@ -2019,6 +2273,7 @@ registerIpcHandler('render-album', async (event, payload) => {
     report.job.humanMessage = 'Render completed successfully.';
     report.job.endTs = new Date().toISOString();
     report.job.durationMs = Date.now() - jobStartedAtMs;
+    updatePerfSnapshot({ finalizeMs: Date.now() - finalizeStartedAtMs });
     reportPath = writeRenderReport(exportFolder, report);
     finalizeSummary.reportMs = Date.now() - reportStartedAtMs;
     emitFinalizeStep(jobId, 'finalize.write_report.end', { reportPath });
@@ -2046,10 +2301,22 @@ registerIpcHandler('render-album', async (event, payload) => {
       exdevFallbackCount,
       ...finalizeSummary,
     });
+    sessionLogger?.info?.('render.perf_summary', {
+      jobId,
+      trackCount: tracks.length,
+      encodeMsTotal: Math.max(0, Math.floor(encodeMsTotal)),
+      finalizeMsTotal: Math.max(0, Math.floor(finalizeSummary.totalMs)),
+      ffmpegSpawnMs: {
+        count: ffmpegSpawnMsCount,
+        min: ffmpegSpawnMsMin,
+        max: ffmpegSpawnMsMax,
+        avg: ffmpegSpawnMsCount > 0 ? Math.round(ffmpegSpawnMsTotal / ffmpegSpawnMsCount) : null,
+      },
+    });
     emitFinalizeStep(jobId, 'finalize.end', { renderedCount: rendered.length, reportPath, ...finalizeSummary });
 
     sessionLogger?.info('render.success', { jobId, renderedCount: rendered.length, reportPath });
-    event.sender.send('render-status', { phase: 'success' });
+    sendRenderStatus(event.sender, { phase: 'success' });
 
     if (debugLogger?.path) currentJob.cleanupContext.stagingPaths.delete(debugLogger.path);
     return {
@@ -2069,6 +2336,7 @@ registerIpcHandler('render-album', async (event, payload) => {
     report.job.humanMessage = humanMessageForReason(reasonCode, err);
     report.job.endTs = new Date().toISOString();
     report.job.durationMs = Date.now() - jobStartedAtMs;
+    updatePerfSnapshot();
 
     const lastTrack = report.tracks[report.tracks.length - 1];
     if (lastTrack && !lastTrack.endTs) {

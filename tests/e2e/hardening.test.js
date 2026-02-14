@@ -56,7 +56,7 @@ async function waitUntil(checkFn, { timeoutMs = 5000, intervalMs = 50, timeoutMe
 function runProgressTruthPolicyTest() {
   const source = fs.readFileSync(mainJsPath, 'utf8');
   const findRenderProgressEventWithPhaseAfter = (phase, startIdx) => {
-    const marker = "event.sender.send('render-progress', {";
+    const marker = 'sendRenderProgress(event.sender, {';
     let cursor = Math.max(0, Number(startIdx) || 0);
     while (cursor >= 0) {
       const eventIdx = source.indexOf(marker, cursor);
@@ -84,14 +84,18 @@ function runProgressTruthPolicyTest() {
     'Progress truth: expected FINALIZING payload to set percentTotal=99.9.'
   );
   assertOk(
+    source.includes('progressSignal: getJobProgressSignal()'),
+    'Progress truth: expected FINALIZING payload to include progressSignal.'
+  );
+  assertOk(
     source.includes('Math.min(0.999, jobDoneMs / jobTotalMs)'),
     'Progress truth: expected FINALIZING rawProgress cap below 1.0 before success.'
   );
 
   // Guard 3: success status happens only after explicit FINALIZING progress emission.
-  const idxFinalizingStatus = source.indexOf("event.sender.send('render-status', { phase: 'finalizing' });");
+  const idxFinalizingStatus = source.indexOf("sendRenderStatus(event.sender, { phase: 'finalizing' });");
   const idxFinalizingProgress = findRenderProgressEventWithPhaseAfter('FINALIZING', idxFinalizingStatus);
-  const idxSuccessStatus = source.indexOf("event.sender.send('render-status', { phase: 'success' });");
+  const idxSuccessStatus = source.indexOf("sendRenderStatus(event.sender, { phase: 'success' });");
   const idxFinalizeStart = source.indexOf("emitFinalizeStep(jobId, 'finalize.start'");
   const idxFinalizeRenameStart = source.indexOf("emitFinalizeStep(jobId, 'finalize.rename_outputs.start'");
   const idxFinalizeRenameMethod = source.indexOf("emitFinalizeStep(jobId, 'finalize.rename_outputs.method'");
@@ -143,6 +147,27 @@ function runProgressTruthPolicyTest() {
   );
 
   console.log('OK: progress truth policy keeps pre-success progress below 100 and finalizes before success');
+}
+
+function runPerfSnapshotContractTest() {
+  const source = fs.readFileSync(mainJsPath, 'utf8');
+  assertOk(
+    source.includes('encodeMsTotal') && source.includes('ffmpegSpawnMs'),
+    'Perf snapshot: expected encodeMsTotal/ffmpegSpawnMs metrics in main render pipeline.'
+  );
+  assertOk(
+    source.includes('finalizeMs: null') && source.includes('finalizeMsTotal'),
+    'Perf snapshot: expected finalizeMs fields in report snapshot and perf summary log.'
+  );
+  assertOk(
+    source.includes('trackReport.encodeMs') && source.includes('trackReport.ffmpegSpawnMs'),
+    'Perf snapshot: expected per-track encodeMs/ffmpegSpawnMs fields in report.'
+  );
+  assertOk(
+    source.includes('progressStatusTail: getRenderSignalsTail(MAX_LOG_EVENTS)'),
+    'Perf snapshot: expected diagnostics export to include progress/status tail.'
+  );
+  console.log('OK: perf snapshot contract present in render report + diagnostics export');
 }
 
 function runRendererExportContractTest() {
@@ -343,6 +368,7 @@ function runIpcPathHardeningTest() {
 
 (async () => {
   runProgressTruthPolicyTest();
+  runPerfSnapshotContractTest();
   runRendererExportContractTest();
   await runCancelFinalizingCleanupTest();
   runIpcPathHardeningTest();

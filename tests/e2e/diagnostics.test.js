@@ -69,6 +69,22 @@ function assertOk(condition, message) {
       'ffmpeg.exe': 'hash1',
       'ffprobe.exe': 'hash2',
     },
+    startupPartialScan: {
+      foundCount: 0,
+      rootsScanned: 2,
+      examples: [],
+    },
+    finalizeSummary: {
+      renameMs: 10,
+      reportMs: 5,
+      cleanupMs: 2,
+      totalMs: 17,
+    },
+    progressStatusTail: [
+      { ts: new Date().toISOString(), kind: 'status', payload: { phase: 'rendering' } },
+      { ts: new Date().toISOString(), kind: 'progress', payload: { phase: 'ENCODING', rawProgress: 0.42 } },
+      { ts: new Date().toISOString(), kind: 'status', payload: { phase: 'finalizing' } },
+    ],
     maxLogEvents: 200,
   });
 
@@ -106,9 +122,23 @@ function assertOk(condition, message) {
   assertOk(Boolean(diagnostics.app), 'Diagnostics test: missing app key.');
   assertOk(Boolean(diagnostics.engine), 'Diagnostics test: missing engine key.');
   assertOk(Boolean(diagnostics.logs), 'Diagnostics test: missing logs key.');
+  assertOk(Boolean(diagnostics.observability), 'Diagnostics test: missing observability key.');
   assertOk(Array.isArray(diagnostics.logs.events), 'Diagnostics test: logs.events must be an array.');
+  assertOk(Array.isArray(diagnostics.logs.progressStatusTail), 'Diagnostics test: logs.progressStatusTail must be an array.');
   assertOk(diagnostics.logs.events.length === 200, `Diagnostics test: expected 200 tail events, got ${diagnostics.logs.events.length}.`);
+  assertOk(
+    diagnostics.logs.progressStatusTail.length === 3,
+    `Diagnostics test: expected 3 progress/status events, got ${diagnostics.logs.progressStatusTail.length}.`
+  );
   assertOk(diagnostics.logs.truncated === true, 'Diagnostics test: expected truncated=true for >200 input events.');
+  assertOk(
+    diagnostics.observability.startupPartialScan && diagnostics.observability.startupPartialScan.foundCount === 0,
+    'Diagnostics test: expected startupPartialScan in observability.'
+  );
+  assertOk(
+    diagnostics.observability.finalizeSummary && diagnostics.observability.finalizeSummary.totalMs === 17,
+    'Diagnostics test: expected finalizeSummary in observability.'
+  );
 
   const serialized = JSON.stringify(diagnostics);
   assertOk(!serialized.includes('/Users/alice/'), 'Diagnostics test: expected /Users path redaction.');
