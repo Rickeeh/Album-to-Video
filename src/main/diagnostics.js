@@ -62,6 +62,36 @@ function readSessionTail(sessionLogPath, maxEvents = MAX_LOG_EVENTS) {
   };
 }
 
+function normalizeProgressStatusTail(progressStatusTail, maxEvents = MAX_LOG_EVENTS) {
+  if (!Array.isArray(progressStatusTail)) return [];
+  const limit = Math.max(1, Number(maxEvents) || MAX_LOG_EVENTS);
+  return progressStatusTail
+    .slice(-limit)
+    .map((entry) => {
+      const row = (entry && typeof entry === 'object' && !Array.isArray(entry)) ? entry : {};
+      const kindRaw = String(row.kind || row.type || '').toLowerCase();
+      const kind = kindRaw === 'status' ? 'status' : (kindRaw === 'progress' ? 'progress' : 'unknown');
+      const payload = (row.payload && typeof row.payload === 'object' && !Array.isArray(row.payload))
+        ? row.payload
+        : {};
+      return {
+        ts: row.ts || null,
+        kind,
+        payload,
+      };
+    });
+}
+
+function findLastLogPayload(events, messageName) {
+  if (!Array.isArray(events)) return null;
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    const entry = events[i];
+    if (!entry || entry.msg !== messageName) continue;
+    return entry.payload && typeof entry.payload === 'object' ? entry.payload : {};
+  }
+  return null;
+}
+
 function readRenderReport(renderReportPath) {
   if (!renderReportPath || !fs.existsSync(renderReportPath)) {
     return {
@@ -121,9 +151,17 @@ async function exportDiagnosticsBundle({
   renderReportPath,
   pinnedWinBinaryHashes = null,
   maxLogEvents = MAX_LOG_EVENTS,
+  startupPartialScan = null,
+  finalizeSummary = null,
+  progressStatusTail = null,
 }) {
   if (!destinationDir) throw new Error('Missing destinationDir for diagnostics export.');
   ensureDir(destinationDir);
+
+  const logs = readSessionTail(sessionLogPath, maxLogEvents);
+  const normalizedProgressStatusTail = normalizeProgressStatusTail(progressStatusTail, maxLogEvents);
+  const startupFromLogs = findLastLogPayload(logs.events, 'startup.partial_scan');
+  const finalizeFromLogs = findLastLogPayload(logs.events, 'finalize.summary');
 
   const diagnostics = sanitizeValue({
     generatedAt: new Date().toISOString(),
@@ -132,7 +170,14 @@ async function exportDiagnosticsBundle({
       ...(engineInfo || {}),
       pinnedWinBinaryHashes: pinnedWinBinaryHashes || null,
     },
-    logs: readSessionTail(sessionLogPath, maxLogEvents),
+    logs: {
+      ...logs,
+      progressStatusTail: normalizedProgressStatusTail,
+    },
+    observability: {
+      startupPartialScan: startupPartialScan || startupFromLogs || null,
+      finalizeSummary: finalizeSummary || finalizeFromLogs || null,
+    },
     render: readRenderReport(renderReportPath),
   });
 
