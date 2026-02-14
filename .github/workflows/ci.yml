@@ -16,6 +16,7 @@ on:
 jobs:
   macos-intel-x64:
     name: macOS Intel x64 CI
+    if: github.event_name == 'workflow_dispatch'
     runs-on: macos-12
 
     steps:

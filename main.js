@@ -1912,7 +1912,7 @@ registerIpcHandler('render-album', async (event, payload) => {
 
     event.sender.send('render-status', { phase: 'finalizing' });
     const finalizingRaw = (jobHasRealSignal && jobTotalMs > 0)
-      ? Math.max(0, Math.min(1, jobDoneMs / jobTotalMs))
+      ? Math.max(0, Math.min(0.999, jobDoneMs / jobTotalMs))
       : null;
     event.sender.send('render-progress', {
       trackIndex: Math.max(0, tracks.length - 1),

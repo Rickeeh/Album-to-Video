@@ -54,6 +54,22 @@ async function waitUntil(checkFn, { timeoutMs = 5000, intervalMs = 50, timeoutMe
 
 function runProgressTruthPolicyTest() {
   const source = fs.readFileSync(mainJsPath, 'utf8');
+  const findRenderProgressEventWithPhaseAfter = (phase, startIdx) => {
+    const marker = "event.sender.send('render-progress', {";
+    let cursor = Math.max(0, Number(startIdx) || 0);
+    while (cursor >= 0) {
+      const eventIdx = source.indexOf(marker, cursor);
+      if (eventIdx < 0) return -1;
+      const endMatch = source.slice(eventIdx).match(/\}\);\s*/);
+      const blockEnd = endMatch
+        ? eventIdx + endMatch.index + endMatch[0].length
+        : (eventIdx + marker.length);
+      const block = source.slice(eventIdx, blockEnd);
+      if (block.includes(`phase: '${phase}'`)) return eventIdx;
+      cursor = eventIdx + marker.length;
+    }
+    return -1;
+  };
 
   // Guard 1: run-time payload builder always caps pre-success total to < 100.
   assertOk(
@@ -66,10 +82,14 @@ function runProgressTruthPolicyTest() {
     source.includes("phase: 'FINALIZING'") && source.includes('percentTotal: 99.9'),
     'Progress truth: expected FINALIZING payload to set percentTotal=99.9.'
   );
+  assertOk(
+    source.includes('Math.min(0.999, jobDoneMs / jobTotalMs)'),
+    'Progress truth: expected FINALIZING rawProgress cap below 1.0 before success.'
+  );
 
-  // Guard 3: success status happens only after finalizing progress emission.
+  // Guard 3: success status happens only after explicit FINALIZING progress emission.
   const idxFinalizingStatus = source.indexOf("event.sender.send('render-status', { phase: 'finalizing' });");
-  const idxFinalizingProgress = source.indexOf("event.sender.send('render-progress', {\n      trackIndex: Math.max(0, tracks.length - 1),");
+  const idxFinalizingProgress = findRenderProgressEventWithPhaseAfter('FINALIZING', idxFinalizingStatus);
   const idxSuccessStatus = source.indexOf("event.sender.send('render-status', { phase: 'success' });");
   const idxFinalizeStart = source.indexOf("emitFinalizeStep(jobId, 'finalize.start'");
   const idxFinalizeRenameStart = source.indexOf("emitFinalizeStep(jobId, 'finalize.rename_outputs.start'");
