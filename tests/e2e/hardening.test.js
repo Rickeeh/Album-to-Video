@@ -88,8 +88,24 @@ function runProgressTruthPolicyTest() {
     'Progress truth: expected FINALIZING payload to include progressSignal.'
   );
   assertOk(
-    source.includes('Math.min(0.999, jobDoneMs / jobTotalMs)'),
-    'Progress truth: expected FINALIZING rawProgress cap below 1.0 before success.'
+    source.includes('Math.min(0.999') && source.includes('jobExpectedWorkMs'),
+    'Progress truth: expected pre-success rawProgress cap and expected-work payload.'
+  );
+  assertOk(
+    source.includes("const mode = String(audioMode || '').toLowerCase() === 'copy' ? 'WALLCLOCK' : 'MEDIA';"),
+    'Progress truth: expected deterministic WALLCLOCK/MEDIA model switch by audioMode.'
+  );
+  assertOk(
+    source.includes('Math.max(2500, Math.min(20000, Math.max(7000, Math.floor(planned * 0.01))))'),
+    'Progress truth: expected WALLCLOCK expected-work clamp policy.'
+  );
+  assertOk(
+    source.includes('const PROGRESS_EMIT_THROTTLE_MS = 500;'),
+    'Progress truth: expected regular progress throttle at 500ms.'
+  );
+  assertOk(
+    source.includes('progressModel: finalProgressModel') && source.includes('progressModel,'),
+    'Progress truth: expected progressModel in render-progress payloads.'
   );
 
   // Guard 3: success status happens only after explicit FINALIZING progress emission.
@@ -191,6 +207,18 @@ function runRendererExportContractTest() {
   assertOk(
     source.includes('window.api.renderAlbum(payload)'),
     'Renderer export contract: export path must invoke window.api.renderAlbum(payload).'
+  );
+  assertOk(
+    !source.includes("overallPercent.textContent = '--'"),
+    'Renderer export contract: progress must never show -- placeholder.'
+  );
+  assertOk(
+    !source.includes('INDETERMINATE'),
+    'Renderer export contract: indeterminate progress mode should be removed.'
+  );
+  assertOk(
+    source.includes('progressTarget = Math.max(progressTarget, 0.99, progressDisplay);'),
+    'Renderer export contract: finalizing should force target to >= 99%.'
   );
   console.log('OK: renderer export contract uses explicit renderAlbum path with never-silent logs');
 }
