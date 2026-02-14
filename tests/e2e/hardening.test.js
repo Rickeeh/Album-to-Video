@@ -84,6 +84,10 @@ function runProgressTruthPolicyTest() {
     'Progress truth: expected FINALIZING payload to set percentTotal=99.9.'
   );
   assertOk(
+    source.includes('progressSignal: getJobProgressSignal()'),
+    'Progress truth: expected FINALIZING payload to include progressSignal.'
+  );
+  assertOk(
     source.includes('Math.min(0.999, jobDoneMs / jobTotalMs)'),
     'Progress truth: expected FINALIZING rawProgress cap below 1.0 before success.'
   );

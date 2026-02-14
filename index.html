@@ -510,13 +510,18 @@
   let presetCatalog = [];
   let defaultPresetKey = 'album_ep';
   let statusResetTimer = null;
-  let overallDisplayedPercent = 0;
-  let overallPendingPercent = 0;
-  let overallFlushTimer = null;
-  let overallLastFlushAt = 0;
+  let progressMode = 'DETERMINATE';
+  let progressDisplay = 0;
+  let progressTarget = 0;
+  let progressRafId = null;
+  let progressLastFrameTs = 0;
+  let indeterminateTimer = null;
+  let indeterminatePhase = 0;
+  let lastVisualProgress = 0;
+  let hasDeterminateSignal = false;
+  let lastProgressSignal = 'none';
   let disposeProgress = null;
   let disposeStatus = null;
-  const OVERALL_PROGRESS_THROTTLE_MS = 120;
 
   const uiDisableList = [
     btnAddTracks,
@@ -554,61 +559,109 @@
     }
   }
 
-  function clampPercent(value) {
+  function clamp01(value) {
     const n = Number(value);
     if (!Number.isFinite(n)) return 0;
-    return Math.max(0, Math.min(100, n));
+    return Math.max(0, Math.min(1, n));
   }
 
-  function applyOverallProgress(percent) {
-    const safe = Math.max(overallDisplayedPercent, clampPercent(percent));
-    overallDisplayedPercent = safe;
-    overallPendingPercent = safe;
-    totalFill.style.width = `${safe.toFixed(3)}%`;
-    overallPercent.textContent = `${Math.round(safe)}%`;
+  function applyDeterminateProgress(progress01) {
+    const safe = clamp01(progress01);
+    const pct = safe * 100;
+    totalFill.style.width = `${pct.toFixed(1)}%`;
+    overallPercent.textContent = `${Math.round(pct)}%`;
+    lastVisualProgress = safe;
   }
 
-  function scheduleOverallProgress(percent, { force = false } = {}) {
-    const target = Math.max(overallDisplayedPercent, clampPercent(percent));
-    overallPendingPercent = Math.max(overallPendingPercent, target);
+  function readCurrentFillProgress() {
+    const raw = String(totalFill.style.width || '').trim();
+    const value = raw.endsWith('%') ? Number(raw.slice(0, -1)) : Number.NaN;
+    if (!Number.isFinite(value)) return 0;
+    return clamp01(value / 100);
+  }
 
-    if (force) {
-      if (overallFlushTimer) {
-        clearTimeout(overallFlushTimer);
-        overallFlushTimer = null;
-      }
-      overallLastFlushAt = Date.now();
-      applyOverallProgress(overallPendingPercent);
+  function stopProgressRaf() {
+    if (!progressRafId) return;
+    cancelAnimationFrame(progressRafId);
+    progressRafId = null;
+  }
+
+  function stopIndeterminateTimer() {
+    if (!indeterminateTimer) return;
+    clearInterval(indeterminateTimer);
+    indeterminateTimer = null;
+  }
+
+  function startIndeterminateTimer() {
+    if (indeterminateTimer) return;
+    indeterminateTimer = setInterval(() => {
+      if (!isRendering || progressMode !== 'INDETERMINATE') return;
+      indeterminatePhase = (indeterminatePhase + 1) % 60;
+      const wave = (Math.sin(indeterminatePhase / 60 * Math.PI * 2) + 1) / 2;
+      const widthPct = 18 + wave * 24;
+      totalFill.style.width = `${widthPct.toFixed(1)}%`;
+      overallPercent.textContent = '--';
+      lastVisualProgress = clamp01(widthPct / 100);
+    }, 100);
+  }
+
+  function setProgressMode(mode) {
+    progressMode = mode === 'INDETERMINATE' ? 'INDETERMINATE' : 'DETERMINATE';
+    if (progressMode === 'INDETERMINATE') {
+      stopProgressRaf();
+      startIndeterminateTimer();
       return;
     }
+    stopIndeterminateTimer();
+  }
 
-    const now = Date.now();
-    const elapsed = now - overallLastFlushAt;
-    if (!overallFlushTimer && elapsed >= OVERALL_PROGRESS_THROTTLE_MS) {
-      overallLastFlushAt = now;
-      applyOverallProgress(overallPendingPercent);
+  function tickProgress(nowTs) {
+    const now = Number(nowTs) || performance.now();
+    const prev = progressLastFrameTs || now;
+    const dt = Math.max(0, (now - prev) / 1000);
+    progressLastFrameTs = now;
+
+    const delta = Math.max(0, progressTarget - progressDisplay);
+    const speed = Math.max(0.20, Math.min(2.0, 0.35 + (delta * 1.8)));
+    progressDisplay = Math.min(progressDisplay + speed * dt, progressTarget);
+    applyDeterminateProgress(progressDisplay);
+
+    const stable = Math.abs(progressTarget - progressDisplay) < 0.0001;
+    if (stable || !isRendering || progressMode !== 'DETERMINATE') {
+      progressRafId = null;
       return;
     }
-    if (overallFlushTimer) return;
+    progressRafId = requestAnimationFrame(tickProgress);
+  }
 
-    const waitMs = Math.max(0, OVERALL_PROGRESS_THROTTLE_MS - elapsed);
-    overallFlushTimer = setTimeout(() => {
-      overallFlushTimer = null;
-      overallLastFlushAt = Date.now();
-      applyOverallProgress(overallPendingPercent);
-    }, waitMs);
+  function startProgressRaf() {
+    if (progressRafId || progressMode !== 'DETERMINATE') return;
+    progressLastFrameTs = performance.now();
+    progressRafId = requestAnimationFrame(tickProgress);
+  }
+
+  function completeProgressNow() {
+    setProgressMode('DETERMINATE');
+    progressTarget = 1;
+    progressDisplay = 1;
+    hasDeterminateSignal = true;
+    lastProgressSignal = 'both';
+    applyDeterminateProgress(1);
+    stopProgressRaf();
   }
 
   function resetOverallProgress() {
-    if (overallFlushTimer) {
-      clearTimeout(overallFlushTimer);
-      overallFlushTimer = null;
-    }
-    overallLastFlushAt = 0;
-    overallDisplayedPercent = 0;
-    overallPendingPercent = 0;
-    totalFill.style.width = '0%';
-    overallPercent.textContent = '0%';
+    stopProgressRaf();
+    stopIndeterminateTimer();
+    progressMode = 'DETERMINATE';
+    progressDisplay = 0;
+    progressTarget = 0;
+    progressLastFrameTs = 0;
+    indeterminatePhase = 0;
+    lastVisualProgress = 0;
+    hasDeterminateSignal = false;
+    lastProgressSignal = 'none';
+    applyDeterminateProgress(0);
   }
 
   function updateReleaseFolderState() {
@@ -680,40 +733,6 @@
     const x = parseInt(n, 10);
     if (!Number.isFinite(x) || x < 0) return null;
     return String(x).padStart(2, '0');
-  }
-
-  function durationSeconds(track) {
-    const sec = Number(track?.durationSec);
-    if (!Number.isFinite(sec) || sec <= 0) return 1;
-    return sec;
-  }
-
-  function durationWeightedOverallPercent({
-    trackIndex,
-    trackCount,
-    percentTrack,
-    percentTotal,
-    isFinal,
-  }) {
-    const count = Math.max(1, Number(trackCount) || renderQueue.length || 1);
-    const safeTrackIndex = Math.max(0, Math.min(count - 1, Number(trackIndex) || 0));
-    const queue = Array.isArray(renderQueue) ? renderQueue.slice(0, count) : [];
-
-    const durations = queue.map(durationSeconds);
-    while (durations.length < count) durations.push(1);
-
-    const totalDuration = durations.reduce((acc, value) => acc + value, 0);
-    if (!Number.isFinite(totalDuration) || totalDuration <= 0) {
-      return clampPercent(percentTotal);
-    }
-
-    let completedDuration = 0;
-    for (let i = 0; i < safeTrackIndex; i += 1) completedDuration += durations[i];
-
-    const currentTrackProgress = isFinal ? 1 : (clampPercent(percentTrack) / 100);
-    const currentDuration = durations[safeTrackIndex] * currentTrackProgress;
-    const weighted = ((completedDuration + currentDuration) / totalDuration) * 100;
-    return clampPercent(weighted);
   }
 
   function updateCounts() { countLabel.textContent = String(tracks.length); }
@@ -1125,39 +1144,63 @@
     await window.api.cancelRender();
   }
 
+  function updateProgressFromEngine(payload) {
+    if (!isRendering) return;
+    const data = (payload && typeof payload === 'object') ? payload : {};
+    const phase = String(data.phase || '').toUpperCase();
+    const signalRaw = String(data.progressSignal || '').toLowerCase();
+    const progressSignal = ['time', 'size', 'both'].includes(signalRaw) ? signalRaw : 'none';
+    lastProgressSignal = progressSignal;
+    const safeTrackCount = Math.max(1, Number(data.trackCount) || renderQueue.length || 1);
+    const safeTrackIndex = Math.max(0, Math.min(safeTrackCount - 1, Number(data.trackIndex) || 0));
+    const name = renderQueue?.[safeTrackIndex]?.displayName || renderQueue?.[safeTrackIndex]?.originalBase || '—';
+    trackTitle.textContent = `Track ${safeTrackIndex + 1}/${safeTrackCount}: ${name}`;
+
+    if (phase === 'PREPARING') setStatus('Preparing...');
+    else if (phase === 'ENCODING' || phase === 'RENDERING') setStatus('Rendering...');
+    else if (phase === 'FINALIZING') setStatus('Finalizing...');
+
+    const hasRealSignal = (progressSignal !== 'none') || data.hasRealSignal === true;
+    const raw = Number(data.rawProgress);
+    const hasValidRaw = Number.isFinite(raw) && raw >= 0 && raw <= 1;
+    if (!hasRealSignal || progressSignal === 'none') {
+      setProgressMode('INDETERMINATE');
+      return;
+    }
+
+    setProgressMode('DETERMINATE');
+    if (!hasDeterminateSignal) {
+      const visualFloor = Math.min(0.15, Math.max(lastVisualProgress, readCurrentFillProgress()));
+      progressDisplay = Math.max(progressDisplay, visualFloor);
+      hasDeterminateSignal = true;
+      applyDeterminateProgress(progressDisplay);
+    }
+    let target = hasValidRaw ? raw : progressTarget;
+    if (!Number.isFinite(target)) target = progressTarget;
+    target = Math.min(target, 0.99);
+    progressTarget = Math.max(progressTarget, target, progressDisplay);
+    if (phase === 'PREPARING') setStatus('Starting...');
+    startProgressRaf();
+  }
+
   function ensureRenderListeners() {
     if (disposeProgress) disposeProgress();
     if (disposeStatus) disposeStatus();
 
-    disposeProgress = window.api.onRenderProgress(({
-      trackIndex,
-      trackCount,
-      percentTrack,
-      percentTotal,
-      isFinal,
-    }) => {
-      if (!isRendering) return;
-      const safeTrackCount = Math.max(1, Number(trackCount) || renderQueue.length || 1);
-      const safeTrackIndex = Math.max(0, Math.min(safeTrackCount - 1, Number(trackIndex) || 0));
-      const weighted = durationWeightedOverallPercent({
-        trackIndex: safeTrackIndex,
-        trackCount: safeTrackCount,
-        percentTrack,
-        percentTotal,
-        isFinal,
-      });
-      scheduleOverallProgress(weighted, { force: !!isFinal || weighted >= 100 });
-
-      const name = renderQueue?.[safeTrackIndex]?.displayName || renderQueue?.[safeTrackIndex]?.originalBase || '—';
-      trackTitle.textContent = `Track ${safeTrackIndex + 1}/${safeTrackCount}: ${name}`;
-    });
+    disposeProgress = window.api.onRenderProgress((payload) => updateProgressFromEngine(payload));
 
     disposeStatus = window.api.onRenderStatus(({ phase }) => {
-      if (!isRendering) return;
-      if (phase === 'planning') {
+      const normalized = String(phase || '').toLowerCase();
+      if (!isRendering && normalized !== 'success') return;
+      if (normalized === 'planning') {
         setStatus('Planning...');
-      } else if (phase === 'rendering') {
+      } else if (normalized === 'rendering') {
         setStatus('Rendering...');
+      } else if (normalized === 'finalizing') {
+        setStatus('Finalizing...');
+      } else if (normalized === 'success') {
+        completeProgressNow();
+        setStatus('Done');
       }
     });
   }
@@ -1277,7 +1320,6 @@
       }
 
       setStatus('Done');
-      scheduleOverallProgress(100, { force: true });
       if (res?.debugLogPath) {
         const debugFolder = pathDirname(res.debugLogPath);
         if (debugFolder) lastLogFolder = debugFolder;

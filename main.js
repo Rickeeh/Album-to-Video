@@ -1529,9 +1529,23 @@ function runFfmpegStillImage({
     const startedAt = new Date(startedAtMs).toISOString();
     let lastOutTimeMs = 0;
     let trackMaxOutTimeMs = 0;
+    let sizeTrackProgressMs = 0;
+    let lastOutTimeUpdateAtMs = 0;
     let lastSentJobDoneMs = jobDoneBaseMs;
+    let lastProgressEmitAtMs = 0;
     let speedEwma = 0;
     const speedAlpha = 0.25;
+    const PROGRESS_EMIT_THROTTLE_MS = 500;
+    const SIZE_FALLBACK_START_MS = 800;
+    const SIZE_FALLBACK_STALL_MS = 1500;
+    const SIZE_FALLBACK_POLL_MS = 300;
+    let sizeFallbackActive = false;
+    let sizeFallbackSamples = 0;
+    let sizeFallbackUpdates = 0;
+    let audioInputSizeBytes = 0;
+    try {
+      audioInputSizeBytes = Math.max(0, Number(fs.statSync(audioPath).size || 0));
+    } catch {}
 
     const computePercentTrack = () => {
       if (!durationKnown || !lastOutTimeMs) return null;
@@ -1544,16 +1558,63 @@ function runFfmpegStillImage({
       }
       return Math.min(99.9, Math.max(0, pct));
     };
+    const resolveProgressSignal = (timeTrackMs, sizeTrackMs) => {
+      const hasTime = Number.isFinite(timeTrackMs) && timeTrackMs > 0;
+      const hasSize = Number.isFinite(sizeTrackMs) && sizeTrackMs > 0;
+      if (hasTime && hasSize) return 'both';
+      if (hasTime) return 'time';
+      if (hasSize) return 'size';
+      return 'none';
+    };
+    const markSignalVisible = (progressSignal) => {
+      if (typeof markHasRealSignal !== 'function') return;
+      if (progressSignal === 'both') {
+        markHasRealSignal('time');
+        markHasRealSignal('size');
+        return;
+      }
+      if (progressSignal === 'time' || progressSignal === 'size') {
+        markHasRealSignal(progressSignal);
+      }
+    };
+    const shouldUseSizeFallback = (nowMs) => {
+      if (!durationKnown || durationMs <= 0 || audioInputSizeBytes <= 0) return false;
+      if ((nowMs - startedAtMs) < SIZE_FALLBACK_START_MS) return false;
+      if (trackMaxOutTimeMs <= 0) return true;
+      if (lastOutTimeUpdateAtMs <= 0) return true;
+      return (nowMs - lastOutTimeUpdateAtMs) > SIZE_FALLBACK_STALL_MS;
+    };
+    const refreshSizeProgress = (nowMs) => {
+      if (!shouldUseSizeFallback(nowMs)) return sizeTrackProgressMs;
+      sizeFallbackActive = true;
+      sizeFallbackSamples += 1;
+      try {
+        const stat = fs.statSync(outputPath);
+        if (!stat.isFile()) return sizeTrackProgressMs;
+        const writtenBytes = Math.max(0, Number(stat.size || 0));
+        if (writtenBytes <= 0) return sizeTrackProgressMs;
+        const ratio = Math.max(0, Math.min(0.999, writtenBytes / audioInputSizeBytes));
+        const derivedMs = Math.max(0, Math.floor(durationMs * ratio));
+        if (derivedMs > sizeTrackProgressMs) {
+          sizeTrackProgressMs = derivedMs;
+          sizeFallbackUpdates += 1;
+        }
+      } catch {}
+      return sizeTrackProgressMs;
+    };
     const buildProgressPayload = ({
       percentTrack,
       phase,
       isFinal,
       indeterminate,
       jobDoneMs,
+      progressSignal,
+      hasRealSignal,
     }) => {
       const safeDoneMs = Math.max(0, Math.min(safeJobTotalMs, Math.floor(Number(jobDoneMs || 0))));
-      const hasRealSignal = typeof getHasRealSignal === 'function' && getHasRealSignal() === true;
-      const rawProgress = (hasRealSignal && safeJobTotalMs > 0)
+      const signal = ['time', 'size', 'both'].includes(progressSignal) ? progressSignal : 'none';
+      const hasSignal = hasRealSignal === true;
+      const rawProgress = (hasSignal && safeJobTotalMs > 0)
         ? Math.max(0, Math.min(1, safeDoneMs / safeJobTotalMs))
         : null;
       const safePercentTrack = Math.max(0, Math.min(99.9, Number(percentTrack || 0)));
@@ -1572,9 +1633,58 @@ function runFfmpegStillImage({
         phase,
         jobTotalMs: safeJobTotalMs,
         jobDoneMs: safeDoneMs,
-        hasRealSignal,
+        hasRealSignal: hasSignal,
+        progressSignal: signal,
         rawProgress,
       };
+    };
+    const emitProgressSnapshot = ({
+      phase = 'ENCODING',
+      isFinal = false,
+      force = false,
+      percentTrackOverride = null,
+      indeterminateOverride = null,
+    } = {}) => {
+      const nowMs = Date.now();
+      if (!force && (nowMs - lastProgressEmitAtMs) < PROGRESS_EMIT_THROTTLE_MS) return;
+      const sizeMs = refreshSizeProgress(nowMs);
+      let trackDoneMs = Math.max(trackMaxOutTimeMs, sizeMs);
+      if (durationKnown && durationMs > 0) {
+        trackDoneMs = Math.max(0, Math.min(durationMs, trackDoneMs));
+      }
+      const trackSignal = resolveProgressSignal(trackMaxOutTimeMs, sizeMs);
+      const jobSignalSeen = typeof getHasRealSignal === 'function' && getHasRealSignal() === true;
+      const progressSignal = trackSignal === 'none' && jobSignalSeen ? 'time' : trackSignal;
+      const hasSignal = progressSignal !== 'none';
+      if (trackSignal !== 'none') {
+        markSignalVisible(trackSignal);
+        if (firstProgressAtMs === null) firstProgressAtMs = nowMs;
+      }
+      const doneMs = jobDoneBaseMs + trackDoneMs;
+      lastSentJobDoneMs = Math.max(lastSentJobDoneMs, doneMs);
+
+      let percentTrack = Number(percentTrackOverride);
+      if (!Number.isFinite(percentTrack)) {
+        if (durationKnown && durationMs > 0) {
+          percentTrack = Math.min(99.9, Math.max(0, (trackDoneMs / durationMs) * 100));
+        } else {
+          percentTrack = computePercentTrack() || 0;
+        }
+      }
+
+      const indeterminate = indeterminateOverride === null
+        ? !hasSignal
+        : Boolean(indeterminateOverride);
+      sendRenderProgress(event.sender, buildProgressPayload({
+        percentTrack,
+        phase,
+        isFinal,
+        indeterminate,
+        jobDoneMs: lastSentJobDoneMs,
+        progressSignal,
+        hasRealSignal: hasSignal || jobSignalSeen,
+      }));
+      lastProgressEmitAtMs = nowMs;
     };
     const args = [
       ...baseArgs,
@@ -1636,51 +1746,47 @@ function runFfmpegStillImage({
           if (Number.isFinite(v) && v > 0) {
             speedEwma = speedEwma ? (speedEwma * (1 - speedAlpha) + v * speedAlpha) : v;
           }
-        } else if (line.startsWith('out_time_ms=')) {
-          const v = parseInt(line.split('=')[1], 10);
-          if (Number.isFinite(v)) {
-            lastOutTimeMs = v;
-            trackMaxOutTimeMs = Math.max(trackMaxOutTimeMs, Math.max(0, v));
-            if (trackMaxOutTimeMs > 0 && typeof markHasRealSignal === 'function') {
-              markHasRealSignal();
-            }
-            if (firstProgressAtMs === null) firstProgressAtMs = Date.now();
-            const doneMs = jobDoneBaseMs + trackMaxOutTimeMs;
-            lastSentJobDoneMs = doneMs;
-            if (durationKnown) {
-              const pctTrack = computePercentTrack();
-              sendRenderProgress(event.sender, buildProgressPayload({
-                percentTrack: pctTrack || 0,
-                phase: 'ENCODING',
-                isFinal: false,
-                indeterminate: false,
-                jobDoneMs: doneMs,
-              }));
-            } else {
-              sendRenderProgress(event.sender, buildProgressPayload({
-                percentTrack: 0,
-                phase: 'ENCODING',
-                isFinal: false,
-                indeterminate: true,
-                jobDoneMs: doneMs,
-              }));
-            }
+        } else if (line.startsWith('out_time_ms=') || line.startsWith('out_time_us=')) {
+          const raw = line.split('=')[1];
+          let valueMs = Number.NaN;
+          if (line.startsWith('out_time_ms=')) {
+            valueMs = parseInt(raw, 10);
+          } else {
+            const micros = parseInt(raw, 10);
+            valueMs = Number.isFinite(micros) ? Math.floor(micros / 1000) : Number.NaN;
+          }
+          if (Number.isFinite(valueMs)) {
+            const safeMs = Math.max(0, valueMs);
+            lastOutTimeMs = safeMs;
+            trackMaxOutTimeMs = Math.max(trackMaxOutTimeMs, safeMs);
+            lastOutTimeUpdateAtMs = Date.now();
+            emitProgressSnapshot({
+              phase: 'ENCODING',
+              isFinal: false,
+              force: false,
+            });
           }
         } else if (line === 'progress=end') {
-          if (firstProgressAtMs === null) firstProgressAtMs = Date.now();
-          const doneMs = jobDoneBaseMs + trackMaxOutTimeMs;
-          lastSentJobDoneMs = doneMs;
           const isLastTrack = trackIndex === (safeTrackCount - 1);
-          sendRenderProgress(event.sender, buildProgressPayload({
-            percentTrack: 99.9,
+          emitProgressSnapshot({
             phase: isLastTrack ? 'FINALIZING' : 'ENCODING',
             isFinal: true,
-            indeterminate: false,
-            jobDoneMs: doneMs,
-          }));
+            force: true,
+            percentTrackOverride: 99.9,
+            indeterminateOverride: false,
+          });
         }
       }
     });
+
+    const progressTicker = setInterval(() => {
+      if (currentJob.cancelled) return;
+      emitProgressSnapshot({
+        phase: 'ENCODING',
+        isFinal: false,
+        force: false,
+      });
+    }, SIZE_FALLBACK_POLL_MS);
 
     ff.stderr.setEncoding('utf8');
     ff.stderr.on('data', (chunk) => {
@@ -1693,6 +1799,7 @@ function runFfmpegStillImage({
 
     const finalize = (ok, codeOrErr) => {
       clearTimeout(timeout);
+      clearInterval(progressTicker);
       currentJob.ffmpeg = null;
 
       const endedAtMs = Date.now();
@@ -1711,6 +1818,7 @@ function runFfmpegStillImage({
         e.durationMs = endedAtMs - startedAtMs;
         e.encodeMs = e.durationMs;
         e.ffmpegSpawnMs = firstProgressAtMs === null ? null : Math.max(0, firstProgressAtMs - ffmpegSpawnedAtMs);
+        e.progressSignal = resolveProgressSignal(trackMaxOutTimeMs, sizeTrackProgressMs);
         reject(e);
         return;
       }
@@ -1731,6 +1839,10 @@ function runFfmpegStillImage({
           durationSec: dSec,
           jobDoneMs: lastSentJobDoneMs,
           ffmpegSpawnMs: firstProgressAtMs === null ? null : Math.max(0, firstProgressAtMs - ffmpegSpawnedAtMs),
+          progressSignal: resolveProgressSignal(trackMaxOutTimeMs, sizeTrackProgressMs),
+          sizeFallbackActive,
+          sizeFallbackSamples,
+          sizeFallbackUpdates,
         });
         return;
       }
@@ -1753,6 +1865,7 @@ function runFfmpegStillImage({
       e.durationMs = endedAtMs - startedAtMs;
       e.encodeMs = e.durationMs;
       e.ffmpegSpawnMs = firstProgressAtMs === null ? null : Math.max(0, firstProgressAtMs - ffmpegSpawnedAtMs);
+      e.progressSignal = resolveProgressSignal(trackMaxOutTimeMs, sizeTrackProgressMs);
       reject(e);
     };
 
@@ -1815,13 +1928,26 @@ registerIpcHandler('render-album', async (event, payload) => {
   }, 0);
   let jobDoneMs = 0;
   let jobHasRealSignal = false;
+  const jobProgressSignals = new Set();
   let encodeMsTotal = 0;
   let ffmpegSpawnMsCount = 0;
   let ffmpegSpawnMsTotal = 0;
   let ffmpegSpawnMsMin = null;
   let ffmpegSpawnMsMax = null;
-  const markJobHasRealSignal = () => { jobHasRealSignal = true; };
+  const markJobHasRealSignal = (signal) => {
+    jobHasRealSignal = true;
+    const safe = String(signal || '').toLowerCase();
+    if (safe === 'time' || safe === 'size') jobProgressSignals.add(safe);
+  };
   const getJobHasRealSignal = () => jobHasRealSignal;
+  const getJobProgressSignal = () => {
+    const hasTime = jobProgressSignals.has('time');
+    const hasSize = jobProgressSignals.has('size');
+    if (hasTime && hasSize) return 'both';
+    if (hasTime) return 'time';
+    if (hasSize) return 'size';
+    return 'none';
+  };
   const jobStartedAtMs = Date.now();
   const report = {
     appVersion: app.getVersion(),
@@ -1911,6 +2037,7 @@ registerIpcHandler('render-album', async (event, payload) => {
       jobDoneMs: 0,
       rawProgress: null,
       hasRealSignal: false,
+      progressSignal: 'none',
       percentTrack: 0,
       percentTotal: 0,
       indeterminate: true,
@@ -1958,6 +2085,7 @@ registerIpcHandler('render-album', async (event, payload) => {
         fallbackReason: null,
         encodeMs: null,
         ffmpegSpawnMs: null,
+        progressSignal: 'none',
       };
       report.tracks.push(trackReport);
 
@@ -2045,6 +2173,9 @@ registerIpcHandler('render-album', async (event, payload) => {
         : null;
       trackReport.encodeMs = encodeMs;
       trackReport.ffmpegSpawnMs = ffmpegSpawnMs;
+      trackReport.progressSignal = ['time', 'size', 'both'].includes(runResult?.progressSignal)
+        ? runResult.progressSignal
+        : 'none';
       encodeMsTotal += encodeMs;
       if (Number.isFinite(ffmpegSpawnMs) && ffmpegSpawnMs >= 0) {
         ffmpegSpawnMsCount += 1;
@@ -2059,6 +2190,7 @@ registerIpcHandler('render-album', async (event, payload) => {
         trackCount: tracks.length,
         encodeMs,
         ffmpegSpawnMs,
+        progressSignal: trackReport.progressSignal,
         audioMode: trackReport.audioMode,
       });
       updatePerfSnapshot();
@@ -2083,6 +2215,7 @@ registerIpcHandler('render-album', async (event, payload) => {
       jobDoneMs,
       rawProgress: finalizingRaw,
       hasRealSignal: jobHasRealSignal,
+      progressSignal: getJobProgressSignal(),
       percentTrack: 99.9,
       percentTotal: 99.9,
       indeterminate: false,
