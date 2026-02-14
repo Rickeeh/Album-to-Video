@@ -1985,6 +1985,7 @@ registerIpcHandler('render-album', async (event, payload) => {
       jobDoneMs: 0,
       hasRealSignal: false,
       encodeMsTotal: 0,
+      finalizeMs: null,
       ffmpegSpawnMs: {
         count: 0,
         min: null,
@@ -1995,14 +1996,18 @@ registerIpcHandler('render-album', async (event, payload) => {
     },
   };
   let reportPath = null;
-  const updatePerfSnapshot = (finalizeSummary = null) => {
+  const updatePerfSnapshot = ({ finalizeSummary = null, finalizeMs = null } = {}) => {
     const avg = ffmpegSpawnMsCount > 0 ? Math.round(ffmpegSpawnMsTotal / ffmpegSpawnMsCount) : null;
+    const safeFinalizeMs = Number.isFinite(finalizeMs) && finalizeMs >= 0
+      ? Math.floor(finalizeMs)
+      : report.perf.finalizeMs;
     report.perf = {
       ...report.perf,
       jobTotalMs,
       jobDoneMs: Math.max(0, Math.floor(jobDoneMs)),
       hasRealSignal: Boolean(jobHasRealSignal),
       encodeMsTotal: Math.max(0, Math.floor(encodeMsTotal)),
+      finalizeMs: safeFinalizeMs,
       ffmpegSpawnMs: {
         count: ffmpegSpawnMsCount,
         min: ffmpegSpawnMsMin,
@@ -2268,7 +2273,7 @@ registerIpcHandler('render-album', async (event, payload) => {
     report.job.humanMessage = 'Render completed successfully.';
     report.job.endTs = new Date().toISOString();
     report.job.durationMs = Date.now() - jobStartedAtMs;
-    updatePerfSnapshot();
+    updatePerfSnapshot({ finalizeMs: Date.now() - finalizeStartedAtMs });
     reportPath = writeRenderReport(exportFolder, report);
     finalizeSummary.reportMs = Date.now() - reportStartedAtMs;
     emitFinalizeStep(jobId, 'finalize.write_report.end', { reportPath });
@@ -2300,6 +2305,7 @@ registerIpcHandler('render-album', async (event, payload) => {
       jobId,
       trackCount: tracks.length,
       encodeMsTotal: Math.max(0, Math.floor(encodeMsTotal)),
+      finalizeMsTotal: Math.max(0, Math.floor(finalizeSummary.totalMs)),
       ffmpegSpawnMs: {
         count: ffmpegSpawnMsCount,
         min: ffmpegSpawnMsMin,

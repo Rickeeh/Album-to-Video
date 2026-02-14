@@ -156,6 +156,10 @@ function runPerfSnapshotContractTest() {
     'Perf snapshot: expected encodeMsTotal/ffmpegSpawnMs metrics in main render pipeline.'
   );
   assertOk(
+    source.includes('finalizeMs: null') && source.includes('finalizeMsTotal'),
+    'Perf snapshot: expected finalizeMs fields in report snapshot and perf summary log.'
+  );
+  assertOk(
     source.includes('trackReport.encodeMs') && source.includes('trackReport.ffmpegSpawnMs'),
     'Perf snapshot: expected per-track encodeMs/ffmpegSpawnMs fields in report.'
   );
