@@ -15,6 +15,11 @@
     --border:#24314a;
     --danger:#ff6b6b;
     --total:#7fb8ff;
+    --pagePad:20px;
+    --topbarGap:18px;
+    --azGap:16px;
+    --azTop:16px;
+    --azDividerGap:18px;
   }
   *{ box-sizing:border-box; }
   html, body{
@@ -23,13 +28,13 @@
     overflow:hidden;
   }
   body{
-    padding:24px;
+    padding:var(--pagePad);
     font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
     background: var(--bg);
     color: var(--text);
     overflow:hidden;
   }
-  .topbar{ display:flex; align-items:flex-start; justify-content:space-between; gap:13px; margin-bottom:24px; }
+  .topbar{ display:flex; align-items:flex-start; justify-content:space-between; gap:13px; margin-bottom:var(--topbarGap); }
   .title{ font-size:20px; font-weight:900; letter-spacing:0.2px; }
   .subtitle{ font-size:13px; color:var(--muted); margin-top:6px; max-width:860px; line-height:1.35; }
   .topActions{ display:flex; gap:13px; align-items:center; flex-wrap:wrap; }
@@ -72,9 +77,13 @@
     letter-spacing:0.9px;
   }
   .row{ display:flex; gap:13px; flex-wrap:wrap; margin-top:13px; align-items:center; }
+  .row.first{ margin-top:0; }
 
   .isHidden{ display:none !important; }
-  .actionRow{ flex-wrap:nowrap; }
+  .actionRow{
+    flex-wrap:nowrap;
+    margin-top:var(--azTop);
+  }
   .actionRow #btnOpenFolder{ margin-left:auto; }
   button{
     background: var(--accent);
@@ -258,7 +267,7 @@
   .fill.total{ background: var(--total); opacity:0.9; }
   .barText{ position:absolute; inset:0; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:950; color: rgba(234,241,255,0.92); letter-spacing:0.2px; text-shadow: 0 1px 10px rgba(0,0,0,0.55); pointer-events:none; }
   #trackTitle{ display:none; }
-  .statusLine{ margin:0 0 10px 0; font-size:13px; color: var(--muted); line-height:1.35; }
+  .statusLine{ margin:0 0 8px 0; font-size:13px; color: var(--muted); line-height:1.35; }
   /* Reserve space so "Open output folder" never crushes the progress area in fixed window. */
   .openRow{
     margin-top:10px;
@@ -310,8 +319,8 @@
   .toast.info{ border-color: rgba(90,167,255,0.35); color: var(--accentSoft); }
 
   /* --- Settings panel optical balance (UI-only, fixed-window safe) --- */
-  .settingsCard{ padding:18px; }
   .settingsCard .row{ margin-top:10px; }
+  .settingsCard .row.first{ margin-top:0; }
   .settingsCard .inline{ margin-top:10px; gap:12px; }
   .settingsCard .kv{ margin-top:10px; }
   .settingsCard select{ width:min(240px, 100%); }
@@ -327,8 +336,9 @@
     margin-top:auto;
     display:flex;
     flex-direction:column;
-    gap:12px;
+    gap:var(--azGap);
   }
+  .actionZone .progressWrap{ margin-top:calc(var(--azDividerGap) - var(--azGap)); }
 
 </style>
 </head>
@@ -349,7 +359,7 @@
   <div class="card">
     <h3>Tracks</h3>
 
-    <div class="row" style="margin-top:0;">
+    <div class="row first">
       <button id="btnAddTracks">Add Audio Files</button>
       <button class="danger" id="btnClearTracks">Clear</button>
     </div>
@@ -360,7 +370,7 @@
   <div class="card settingsCard">
     <h3>Settings</h3>
 
-    <div class="row">
+    <div class="row first">
       <label class="presetBlock" style="display:flex; flex-direction:column; gap:6px;">
         <span style="color:var(--muted); font-weight:850; font-size:12px;">Preset</span>
         <select id="presetSelect"></select>
@@ -401,7 +411,7 @@
 
     <div class="actionZone">
 
-    <div class="row actionRow" style="margin-top:12px;">
+    <div class="row actionRow">
       <button id="renderBtn" class="primary">Export</button>
       <button id="cancelBtn" class="danger" disabled>Cancel</button>
       <button class="secondary isHidden" id="btnOpenFolder">Open output folder</button>
@@ -955,7 +965,10 @@
     isValidating = true;
     btnAddTracks.disabled = true;
     btnNewAlbum.disabled = true;
-    const validatingToast = showToast('Validating audio', 'info', 999999);
+    let validatingToast = null;
+    const validatingToastTimer = setTimeout(() => {
+      validatingToast = showToast('Validating audio', 'info', 999999);
+    }, 180);
 
     try {
       newFiles.forEach((f) => trackPathSet.add(f));
@@ -1021,6 +1034,7 @@
         scheduleRenderTrackList();
       }
     } finally {
+      clearTimeout(validatingToastTimer);
       dismissToast(validatingToast);
       isValidating = false;
       btnAddTracks.disabled = false;
