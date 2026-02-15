@@ -136,6 +136,8 @@ let FFPROBE_BIN = null;
 let FFMPEG_SOURCE = null;
 let FFPROBE_SOURCE = null;
 let binariesResolved = false;
+let ffmpegWarmupPromise = null;
+let ffmpegWarmupDurationMs = null;
 let musicMetadataModule = null;
 
 function isReadableFile(filePath) {
@@ -312,6 +314,65 @@ function ensureBundledBinaries() {
   }
 }
 
+function runFfmpegWarmupOnce() {
+  if (ffmpegWarmupPromise) return ffmpegWarmupPromise;
+  resolveBundledBinaries();
+  if (!FFMPEG_BIN || !path.isAbsolute(FFMPEG_BIN)) {
+    const payload = { ok: false, skipped: true, reason: 'ffmpeg_missing', durationMs: 0, exitCode: null };
+    sessionLogger?.info?.('ffmpeg.warmup.done', payload);
+    ffmpegWarmupDurationMs = 0;
+    return Promise.resolve(payload);
+  }
+
+  const startedAtMs = Date.now();
+  ffmpegWarmupPromise = new Promise((resolve) => {
+    const p = spawn(FFMPEG_BIN, [
+      '-hide_banner',
+      '-loglevel', 'error',
+      '-f', 'lavfi',
+      '-i', 'anullsrc=r=44100:cl=stereo',
+      '-t', '0.05',
+      '-f', 'null',
+      '-',
+    ], {
+      windowsHide: true,
+      detached: false,
+      shell: false,
+      stdio: ['ignore', 'ignore', 'pipe'],
+    });
+
+    let stderr = '';
+    if (p.stderr) {
+      p.stderr.setEncoding('utf8');
+      p.stderr.on('data', (chunk) => {
+        stderr += chunk;
+        if (stderr.length > 8 * 1024) stderr = stderr.slice(-(8 * 1024));
+      });
+    }
+
+    const timeout = setTimeout(() => {
+      killProcessTree(p);
+    }, 10_000);
+
+    const finish = (ok, code, err) => {
+      clearTimeout(timeout);
+      ffmpegWarmupDurationMs = Math.max(0, Date.now() - startedAtMs);
+      const payload = {
+        ok: Boolean(ok),
+        durationMs: ffmpegWarmupDurationMs,
+        exitCode: Number.isFinite(code) ? code : null,
+      };
+      if (!ok) payload.stderrTail = tailLines(stderr || err, 3);
+      sessionLogger?.info?.('ffmpeg.warmup.done', payload);
+      resolve(payload);
+    };
+
+    p.on('error', (err) => finish(false, null, String(err?.message || err)));
+    p.on('exit', (code) => finish(code === 0, code, null));
+  });
+  return ffmpegWarmupPromise;
+}
+
 function getMusicMetadata() {
   if (!musicMetadataModule) {
     // Lazy-load: avoid loading this dependency during app startup.
@@ -326,6 +387,21 @@ function ensureDir(dirPath) {
     fs.mkdirSync(dirPath, { recursive: true });
   } catch (err) {
     throw new Error(`Failed to create directory "${dirPath}": ${err.message}`);
+  }
+}
+
+function seedSelectedExportFolderFromEnv() {
+  const raw = String(process.env.ALBUM_TO_VIDEO_EXPORT_BASE || '').trim();
+  if (!raw) return;
+  try {
+    const seeded = resolveExistingDirectoryPath(raw, 'Automation export folder');
+    lastSelectedExportFolder = seeded;
+    sessionLogger?.info?.('startup.export_base_seeded', { source: 'env', path: seeded });
+  } catch (err) {
+    sessionLogger?.warn?.('startup.export_base_seed_failed', {
+      source: 'env',
+      message: String(err?.message || err),
+    });
   }
 }
 
@@ -1269,7 +1345,7 @@ function createWindow() {
   });
   mainWindow.webContents.once('did-finish-load', () => perfMark('loadURL.end'));
   perfMark('loadURL.start', { url: 'index.html' });
-  mainWindow.loadFile('index.html');
+  mainWindow.loadFile(path.join(__dirname, 'index.html'));
 }
 
 app.whenReady().then(() => {
@@ -1285,11 +1361,17 @@ app.whenReady().then(() => {
         platform: process.platform,
         arch: process.arch,
       });
+      seedSelectedExportFolderFromEnv();
       resolveBundledBinaries();
       sessionLogger.info('engine.binaries', {
         ...getEngineBinariesSnapshot(),
       });
       sessionLogger.info('engine.startup_probe', buildEnginePathProbe());
+      runFfmpegWarmupOnce().catch((err) => {
+        sessionLogger?.warn?.('ffmpeg.warmup.failed', {
+          message: String(err?.message || err),
+        });
+      });
       try {
         const { screen } = require('electron');
         const d = screen.getPrimaryDisplay?.();
@@ -1556,6 +1638,11 @@ function runFfmpegStillImage({
     let lastOutTimeUpdateAtMs = 0;
     let lastSentJobDoneMs = jobDoneBaseMs;
     let lastProgressEmitAtMs = 0;
+    let ffmpegSpawnedAtMs = startedAtMs;
+    let firstProgressAtMs = null;
+    let firstWriteAtMs = null;
+    let firstProgressLogged = false;
+    let firstWriteLogged = false;
     let speedEwma = 0;
     const speedAlpha = 0.25;
     const PROGRESS_EMIT_THROTTLE_MS = 500;
@@ -1607,6 +1694,45 @@ function runFfmpegStillImage({
       if (progressSignal === 'time' || progressSignal === 'size') {
         markHasRealSignal(progressSignal);
       }
+    };
+    const emitFirstProgressLog = (progressSignal, reason = null) => {
+      if (firstProgressLogged) return;
+      firstProgressLogged = true;
+      sessionLogger?.info?.('ffmpeg.first_progress', {
+        jobId,
+        trackIndex,
+        trackCount: safeTrackCount,
+        audioMode: audioMode || 'copy',
+        progressModel,
+        progressSignal: ['time', 'size', 'both'].includes(progressSignal) ? progressSignal : 'none',
+        firstProgressMs: firstProgressAtMs === null ? null : Math.max(0, firstProgressAtMs - ffmpegSpawnedAtMs),
+        reason,
+      });
+    };
+    const emitFirstWriteLog = (writtenBytes = null, reason = null) => {
+      if (firstWriteLogged) return;
+      firstWriteLogged = true;
+      sessionLogger?.info?.('ffmpeg.first_write', {
+        jobId,
+        trackIndex,
+        trackCount: safeTrackCount,
+        audioMode: audioMode || 'copy',
+        progressModel,
+        firstWriteMs: firstWriteAtMs === null ? null : Math.max(0, firstWriteAtMs - ffmpegSpawnedAtMs),
+        writtenBytes: Number.isFinite(writtenBytes) ? Math.max(0, Math.floor(writtenBytes)) : null,
+        reason,
+      });
+    };
+    const markFirstWriteIfPresent = (nowMs) => {
+      if (firstWriteAtMs !== null) return;
+      try {
+        const stat = fs.statSync(outputPath);
+        if (!stat.isFile()) return;
+        const bytes = Math.max(0, Number(stat.size || 0));
+        if (bytes <= 0) return;
+        firstWriteAtMs = nowMs;
+        emitFirstWriteLog(bytes, 'observed');
+      } catch {}
     };
     const shouldUseSizeFallback = (nowMs) => {
       if (!durationKnown || durationMs <= 0 || audioInputSizeBytes <= 0) return false;
@@ -1686,6 +1812,7 @@ function runFfmpegStillImage({
       percentTrackOverride = null,
     } = {}) => {
       const nowMs = Date.now();
+      markFirstWriteIfPresent(nowMs);
       if (!force && (nowMs - lastProgressEmitAtMs) < PROGRESS_EMIT_THROTTLE_MS) return;
       const sizeMs = refreshSizeProgress(nowMs);
       let trackDoneMs = Math.max(trackMaxOutTimeMs, sizeMs);
@@ -1696,9 +1823,12 @@ function runFfmpegStillImage({
       const jobSignalSeen = typeof getHasRealSignal === 'function' && getHasRealSignal() === true;
       const progressSignal = trackSignal === 'none' && jobSignalSeen ? 'time' : trackSignal;
       const hasSignal = progressSignal !== 'none';
+      if (firstProgressAtMs === null) {
+        firstProgressAtMs = nowMs;
+        emitFirstProgressLog(progressSignal, 'observed');
+      }
       if (trackSignal !== 'none') {
         markSignalVisible(trackSignal);
-        if (firstProgressAtMs === null) firstProgressAtMs = nowMs;
       }
       const doneMs = jobDoneBaseMs + trackDoneMs;
       lastSentJobDoneMs = Math.max(lastSentJobDoneMs, doneMs);
@@ -1750,10 +1880,10 @@ function runFfmpegStillImage({
     const ff = spawn(FFMPEG_BIN, args, {
       windowsHide: true,
       detached: false,
+      shell: false,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
-    const ffmpegSpawnedAtMs = Date.now();
-    let firstProgressAtMs = null;
+    ffmpegSpawnedAtMs = Date.now();
 
     currentJob.ffmpeg = ff;
     if (currentJob.cleanupContext) {
@@ -1840,6 +1970,11 @@ function runFfmpegStillImage({
 
       const endedAtMs = Date.now();
       const endedAt = new Date(endedAtMs).toISOString();
+      const firstProgressMs = firstProgressAtMs === null ? null : Math.max(0, firstProgressAtMs - ffmpegSpawnedAtMs);
+      const firstWriteMs = firstWriteAtMs === null ? null : Math.max(0, firstWriteAtMs - ffmpegSpawnedAtMs);
+      const finalSignal = resolveProgressSignal(trackMaxOutTimeMs, sizeTrackProgressMs);
+      emitFirstProgressLog(finalSignal, firstProgressAtMs === null ? 'unavailable' : 'observed');
+      emitFirstWriteLog(null, firstWriteAtMs === null ? 'unavailable' : 'observed');
       if (currentJob.cancelled) {
         const reason = currentJob.cancelReason || (killedByTimeout ? REASON_CODES.TIMEOUT : REASON_CODES.CANCELLED);
         const e = new Error(reason);
@@ -1853,8 +1988,10 @@ function runFfmpegStillImage({
         e.endTs = endedAt;
         e.durationMs = endedAtMs - startedAtMs;
         e.encodeMs = e.durationMs;
-        e.ffmpegSpawnMs = firstProgressAtMs === null ? null : Math.max(0, firstProgressAtMs - ffmpegSpawnedAtMs);
-        e.progressSignal = resolveProgressSignal(trackMaxOutTimeMs, sizeTrackProgressMs);
+        e.ffmpegSpawnMs = firstProgressMs;
+        e.firstProgressMs = firstProgressMs;
+        e.firstWriteMs = firstWriteMs;
+        e.progressSignal = finalSignal;
         e.progressModel = progressModel;
         e.jobExpectedWorkMs = jobExpectedWorkMs;
         reject(e);
@@ -1876,8 +2013,10 @@ function runFfmpegStillImage({
           encodeMs: endedAtMs - startedAtMs,
           durationSec: dSec,
           jobDoneMs: lastSentJobDoneMs,
-          ffmpegSpawnMs: firstProgressAtMs === null ? null : Math.max(0, firstProgressAtMs - ffmpegSpawnedAtMs),
-          progressSignal: resolveProgressSignal(trackMaxOutTimeMs, sizeTrackProgressMs),
+          ffmpegSpawnMs: firstProgressMs,
+          firstProgressMs,
+          firstWriteMs,
+          progressSignal: finalSignal,
           progressModel,
           jobExpectedWorkMs,
           sizeFallbackActive,
@@ -1904,8 +2043,10 @@ function runFfmpegStillImage({
       e.endTs = endedAt;
       e.durationMs = endedAtMs - startedAtMs;
       e.encodeMs = e.durationMs;
-      e.ffmpegSpawnMs = firstProgressAtMs === null ? null : Math.max(0, firstProgressAtMs - ffmpegSpawnedAtMs);
-      e.progressSignal = resolveProgressSignal(trackMaxOutTimeMs, sizeTrackProgressMs);
+      e.ffmpegSpawnMs = firstProgressMs;
+      e.firstProgressMs = firstProgressMs;
+      e.firstWriteMs = firstWriteMs;
+      e.progressSignal = finalSignal;
       e.progressModel = progressModel;
       e.jobExpectedWorkMs = jobExpectedWorkMs;
       reject(e);
@@ -1984,6 +2125,14 @@ registerIpcHandler('render-album', async (event, payload) => {
   let ffmpegSpawnMsTotal = 0;
   let ffmpegSpawnMsMin = null;
   let ffmpegSpawnMsMax = null;
+  let firstWriteMsCount = 0;
+  let firstWriteMsTotal = 0;
+  let firstWriteMsMin = null;
+  let firstWriteMsMax = null;
+  let firstProgressMsCount = 0;
+  let firstProgressMsTotal = 0;
+  let firstProgressMsMin = null;
+  let firstProgressMsMax = null;
   const markJobHasRealSignal = (signal) => {
     jobHasRealSignal = true;
     const safe = String(signal || '').toLowerCase();
@@ -2042,12 +2191,27 @@ registerIpcHandler('render-album', async (event, payload) => {
         max: null,
         avg: null,
       },
+      firstWriteMs: {
+        count: 0,
+        min: null,
+        max: null,
+        avg: null,
+      },
+      firstProgressMs: {
+        count: 0,
+        min: null,
+        max: null,
+        avg: null,
+      },
+      ffmpegWarmupMs: Number.isFinite(ffmpegWarmupDurationMs) ? Math.max(0, Math.floor(ffmpegWarmupDurationMs)) : null,
       finalizeSummary: null,
     },
   };
   let reportPath = null;
   const updatePerfSnapshot = ({ finalizeSummary = null, finalizeMs = null } = {}) => {
-    const avg = ffmpegSpawnMsCount > 0 ? Math.round(ffmpegSpawnMsTotal / ffmpegSpawnMsCount) : null;
+    const ffmpegSpawnAvg = ffmpegSpawnMsCount > 0 ? Math.round(ffmpegSpawnMsTotal / ffmpegSpawnMsCount) : null;
+    const firstWriteAvg = firstWriteMsCount > 0 ? Math.round(firstWriteMsTotal / firstWriteMsCount) : null;
+    const firstProgressAvg = firstProgressMsCount > 0 ? Math.round(firstProgressMsTotal / firstProgressMsCount) : null;
     const safeFinalizeMs = Number.isFinite(finalizeMs) && finalizeMs >= 0
       ? Math.floor(finalizeMs)
       : report.perf.finalizeMs;
@@ -2062,8 +2226,21 @@ registerIpcHandler('render-album', async (event, payload) => {
         count: ffmpegSpawnMsCount,
         min: ffmpegSpawnMsMin,
         max: ffmpegSpawnMsMax,
-        avg,
+        avg: ffmpegSpawnAvg,
       },
+      firstWriteMs: {
+        count: firstWriteMsCount,
+        min: firstWriteMsMin,
+        max: firstWriteMsMax,
+        avg: firstWriteAvg,
+      },
+      firstProgressMs: {
+        count: firstProgressMsCount,
+        min: firstProgressMsMin,
+        max: firstProgressMsMax,
+        avg: firstProgressAvg,
+      },
+      ffmpegWarmupMs: Number.isFinite(ffmpegWarmupDurationMs) ? Math.max(0, Math.floor(ffmpegWarmupDurationMs)) : null,
       finalizeSummary: finalizeSummary ? { ...finalizeSummary } : report.perf.finalizeSummary,
     };
   };
@@ -2144,6 +2321,8 @@ registerIpcHandler('render-album', async (event, payload) => {
         fallbackReason: null,
         encodeMs: null,
         ffmpegSpawnMs: null,
+        firstWriteMs: null,
+        firstProgressMs: null,
         progressSignal: 'none',
         progressModel: initialModelInfo.progressModel,
         jobExpectedWorkMs: null,
@@ -2234,8 +2413,18 @@ registerIpcHandler('render-album', async (event, payload) => {
       const ffmpegSpawnMs = Number.isFinite(spawnMsRaw) && spawnMsRaw >= 0
         ? Math.floor(spawnMsRaw)
         : null;
+      const firstWriteMsRaw = Number(runResult?.firstWriteMs);
+      const firstWriteMs = Number.isFinite(firstWriteMsRaw) && firstWriteMsRaw >= 0
+        ? Math.floor(firstWriteMsRaw)
+        : null;
+      const firstProgressMsRaw = Number(runResult?.firstProgressMs);
+      const firstProgressMs = Number.isFinite(firstProgressMsRaw) && firstProgressMsRaw >= 0
+        ? Math.floor(firstProgressMsRaw)
+        : null;
       trackReport.encodeMs = encodeMs;
       trackReport.ffmpegSpawnMs = ffmpegSpawnMs;
+      trackReport.firstWriteMs = firstWriteMs;
+      trackReport.firstProgressMs = firstProgressMs;
       trackReport.progressSignal = ['time', 'size', 'both'].includes(runResult?.progressSignal)
         ? runResult.progressSignal
         : 'none';
@@ -2254,6 +2443,22 @@ registerIpcHandler('render-album', async (event, payload) => {
         ffmpegSpawnMsMin = ffmpegSpawnMsMin === null ? ffmpegSpawnMs : Math.min(ffmpegSpawnMsMin, ffmpegSpawnMs);
         ffmpegSpawnMsMax = ffmpegSpawnMsMax === null ? ffmpegSpawnMs : Math.max(ffmpegSpawnMsMax, ffmpegSpawnMs);
       }
+      if (Number.isFinite(firstWriteMs) && firstWriteMs >= 0) {
+        firstWriteMsCount += 1;
+        firstWriteMsTotal += firstWriteMs;
+        firstWriteMsMin = firstWriteMsMin === null ? firstWriteMs : Math.min(firstWriteMsMin, firstWriteMs);
+        firstWriteMsMax = firstWriteMsMax === null ? firstWriteMs : Math.max(firstWriteMsMax, firstWriteMs);
+      }
+      if (Number.isFinite(firstProgressMs) && firstProgressMs >= 0) {
+        firstProgressMsCount += 1;
+        firstProgressMsTotal += firstProgressMs;
+        firstProgressMsMin = firstProgressMsMin === null
+          ? firstProgressMs
+          : Math.min(firstProgressMsMin, firstProgressMs);
+        firstProgressMsMax = firstProgressMsMax === null
+          ? firstProgressMs
+          : Math.max(firstProgressMsMax, firstProgressMs);
+      }
       jobDoneMs = Math.max(jobDoneMs, Math.floor(Number(runResult?.jobDoneMs || 0)));
       sessionLogger?.info?.('render.track_perf', {
         jobId,
@@ -2261,6 +2466,8 @@ registerIpcHandler('render-album', async (event, payload) => {
         trackCount: tracks.length,
         encodeMs,
         ffmpegSpawnMs,
+        firstWriteMs,
+        firstProgressMs,
         progressSignal: trackReport.progressSignal,
         audioMode: trackReport.audioMode,
       });
@@ -2389,6 +2596,19 @@ registerIpcHandler('render-album', async (event, payload) => {
         max: ffmpegSpawnMsMax,
         avg: ffmpegSpawnMsCount > 0 ? Math.round(ffmpegSpawnMsTotal / ffmpegSpawnMsCount) : null,
       },
+      firstWriteMs: {
+        count: firstWriteMsCount,
+        min: firstWriteMsMin,
+        max: firstWriteMsMax,
+        avg: firstWriteMsCount > 0 ? Math.round(firstWriteMsTotal / firstWriteMsCount) : null,
+      },
+      firstProgressMs: {
+        count: firstProgressMsCount,
+        min: firstProgressMsMin,
+        max: firstProgressMsMax,
+        avg: firstProgressMsCount > 0 ? Math.round(firstProgressMsTotal / firstProgressMsCount) : null,
+      },
+      ffmpegWarmupMs: Number.isFinite(ffmpegWarmupDurationMs) ? Math.max(0, Math.floor(ffmpegWarmupDurationMs)) : null,
     });
     emitFinalizeStep(jobId, 'finalize.end', { renderedCount: rendered.length, reportPath, ...finalizeSummary });
 

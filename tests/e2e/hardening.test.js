@@ -168,16 +168,33 @@ function runProgressTruthPolicyTest() {
 function runPerfSnapshotContractTest() {
   const source = fs.readFileSync(mainJsPath, 'utf8');
   assertOk(
-    source.includes('encodeMsTotal') && source.includes('ffmpegSpawnMs'),
-    'Perf snapshot: expected encodeMsTotal/ffmpegSpawnMs metrics in main render pipeline.'
+    source.includes('encodeMsTotal')
+      && source.includes('ffmpegSpawnMs')
+      && source.includes('firstWriteMs')
+      && source.includes('firstProgressMs'),
+    'Perf snapshot: expected encodeMsTotal/ffmpegSpawnMs/firstWriteMs/firstProgressMs metrics in main render pipeline.'
   );
   assertOk(
     source.includes('finalizeMs: null') && source.includes('finalizeMsTotal'),
     'Perf snapshot: expected finalizeMs fields in report snapshot and perf summary log.'
   );
   assertOk(
-    source.includes('trackReport.encodeMs') && source.includes('trackReport.ffmpegSpawnMs'),
-    'Perf snapshot: expected per-track encodeMs/ffmpegSpawnMs fields in report.'
+    source.includes('trackReport.encodeMs')
+      && source.includes('trackReport.ffmpegSpawnMs')
+      && source.includes('trackReport.firstWriteMs')
+      && source.includes('trackReport.firstProgressMs'),
+    'Perf snapshot: expected per-track encodeMs/ffmpegSpawnMs/firstWriteMs/firstProgressMs fields in report.'
+  );
+  assertOk(
+    source.includes("sessionLogger?.info?.('ffmpeg.warmup.done'")
+      && source.includes("sessionLogger?.info?.('ffmpeg.first_write'")
+      && source.includes("sessionLogger?.info?.('ffmpeg.first_progress'"),
+    'Perf snapshot: expected structured logs ffmpeg.warmup.done/ffmpeg.first_write/ffmpeg.first_progress.'
+  );
+  assertOk(
+    source.includes('Math.max(0, firstWriteAtMs - ffmpegSpawnedAtMs)')
+      && source.includes('Math.max(0, firstProgressAtMs - ffmpegSpawnedAtMs)'),
+    'Perf snapshot: expected firstWriteMs/firstProgressMs to be clamped to sane non-negative ranges.'
   );
   assertOk(
     source.includes('progressStatusTail: getRenderSignalsTail(MAX_LOG_EVENTS)'),
