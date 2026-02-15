@@ -21,6 +21,7 @@
     --azTop:16px;
     --azDividerGap:18px;
     --bottomInset:16px;
+    --subSectionGap:22px;
   }
   *{ box-sizing:border-box; }
   html, body{
@@ -322,8 +323,9 @@
   /* --- Settings panel optical balance (UI-only, fixed-window safe) --- */
   .settingsCard .row{ margin-top:10px; }
   .settingsCard .row.first{ margin-top:0; }
+  .settingsCard .subSection{ margin-top:var(--subSectionGap); }
   .settingsCard .inline{ margin-top:10px; gap:12px; }
-  .settingsCard .kv{ margin-top:10px; }
+  .settingsCard .kv{ margin-top:var(--subSectionGap); }
   .settingsCard .actionRow{ margin-top:var(--bottomInset); }
   .settingsCard select{ width:min(240px, 100%); }
   .settingsCard #releaseFolderSection{ min-width:0; }
@@ -388,12 +390,12 @@
       </div>
     </div>
 
-    <div class="row">
+    <div class="row subSection">
       <button class="secondary" id="btnCover">Choose cover art</button>
       <button class="secondary" id="btnExport">Choose export folder</button>
     </div>
 
-    <div class="coverPreviewRow">
+    <div class="coverPreviewRow subSection">
       <div class="coverPreview">
         <img id="coverImg" alt="Cover art" />
         <div class="coverPlaceholder" id="coverPlaceholder">No cover art</div>
