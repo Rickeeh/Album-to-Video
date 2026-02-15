@@ -3,7 +3,12 @@ const os = require('os');
 const path = require('path');
 const {
   exportDiagnosticsBundle,
+  readDiagnosticsBundle,
   MAX_RENDER_REPORT_BYTES,
+  DIAGNOSTICS_SCHEMA_FAMILY,
+  DIAGNOSTICS_SCHEMA_VERSION,
+  RENDER_REPORT_SCHEMA_FAMILY,
+  RENDER_REPORT_SCHEMA_VERSION,
 } = require('../../src/main/diagnostics');
 
 function assertOk(condition, message) {
@@ -43,7 +48,8 @@ function assertOk(condition, message) {
   fs.writeFileSync(sessionLogPath, `${events.join('\n')}\n`, 'utf8');
 
   fs.writeFileSync(renderReportPath, JSON.stringify({
-    reportVersion: 1,
+    schemaFamily: RENDER_REPORT_SCHEMA_FAMILY,
+    schemaVersion: RENDER_REPORT_SCHEMA_VERSION,
     outputPath: '/Users/alice/exports/final.mp4',
   }), 'utf8');
 
@@ -126,6 +132,11 @@ function assertOk(condition, message) {
 
   const diagnostics = JSON.parse(fs.readFileSync(result.diagnosticsPath, 'utf8'));
   assertOk(typeof diagnostics === 'object' && diagnostics !== null, 'Diagnostics test: invalid diagnostics JSON.');
+  assertOk(
+    diagnostics.schemaFamily === DIAGNOSTICS_SCHEMA_FAMILY
+      && diagnostics.schemaVersion === DIAGNOSTICS_SCHEMA_VERSION,
+    'Diagnostics test: diagnostics schemaFamily/schemaVersion missing or invalid.'
+  );
   assertOk(Boolean(diagnostics.app), 'Diagnostics test: missing app key.');
   assertOk(Boolean(diagnostics.engine), 'Diagnostics test: missing engine key.');
   assertOk(Boolean(diagnostics.logs), 'Diagnostics test: missing logs key.');
@@ -177,6 +188,55 @@ function assertOk(condition, message) {
   assertOk(
     oversized.included === false && oversized.reason === 'too_large',
     'Diagnostics test: expected oversized render report to be skipped with included=false and reason=too_large.'
+  );
+
+  // Missing render report schema should be unsupported (fail-safe, no include).
+  const badSchemaRenderDir = path.join(root, 'BadSchema', 'Logs');
+  const badSchemaRenderPath = path.join(badSchemaRenderDir, 'render-report.json');
+  fs.mkdirSync(badSchemaRenderDir, { recursive: true });
+  fs.writeFileSync(badSchemaRenderPath, JSON.stringify({
+    outputPath: '/Users/alice/exports/legacy-no-schema.mp4',
+  }), 'utf8');
+  const badSchemaResult = await exportDiagnosticsBundle({
+    destinationDir: badSchemaRenderDir,
+    appInfo: { appVersion: '1.0.0' },
+    engineInfo: { GLOBAL_FPS: 1 },
+    sessionLogPath,
+    renderReportPath: badSchemaRenderPath,
+  });
+  const badSchemaDiagnostics = JSON.parse(fs.readFileSync(badSchemaResult.diagnosticsPath, 'utf8'));
+  assertOk(
+    badSchemaDiagnostics?.render?.included === false
+      && badSchemaDiagnostics?.render?.reason === 'schema_missing',
+    'Diagnostics test: render report without schema should be rejected as schema_missing.'
+  );
+  assertOk(
+    Array.isArray(badSchemaResult.schemaEvents)
+      && badSchemaResult.schemaEvents.some((e) => e.code === 'schema.missing' && e.type === 'renderReport'),
+    'Diagnostics test: expected schema.missing event for renderReport.'
+  );
+
+  // Diagnostics reader contract: unsupported/missing schema should fail-safe.
+  const supportedRead = readDiagnosticsBundle(result.diagnosticsPath);
+  assertOk(supportedRead.supported === true, 'Diagnostics test: expected readDiagnosticsBundle to support current schema.');
+
+  const legacyDiagnosticsPath = path.join(root, 'legacy-diagnostics.json');
+  fs.writeFileSync(legacyDiagnosticsPath, JSON.stringify({ hello: 'world' }), 'utf8');
+  const legacyRead = readDiagnosticsBundle(legacyDiagnosticsPath);
+  assertOk(
+    legacyRead.supported === false && legacyRead.schemaEvent?.code === 'schema.missing',
+    'Diagnostics test: diagnostics without schemaVersion should be schema.missing.'
+  );
+
+  const unsupportedDiagnosticsPath = path.join(root, 'unsupported-diagnostics.json');
+  fs.writeFileSync(unsupportedDiagnosticsPath, JSON.stringify({
+    schemaFamily: DIAGNOSTICS_SCHEMA_FAMILY,
+    schemaVersion: 99,
+  }), 'utf8');
+  const unsupportedRead = readDiagnosticsBundle(unsupportedDiagnosticsPath);
+  assertOk(
+    unsupportedRead.supported === false && unsupportedRead.schemaEvent?.code === 'schema.unsupported',
+    'Diagnostics test: diagnostics with unsupported schemaVersion should be schema.unsupported.'
   );
 
   console.log('OK: diagnostics export writes bundle with keys and redacted paths');

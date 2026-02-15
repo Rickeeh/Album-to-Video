@@ -44,6 +44,8 @@ function main() {
   const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
   const preloadSource = readText('preload.js');
   const mainSource = readText('main.js');
+  const diagnosticsSource = readText('src/main/diagnostics.js');
+  const jobLedgerSource = readText('src/main/job-ledger.js');
 
   const record = (ok, passMsg, failMsg) => {
     if (ok) passes.push(passMsg);
@@ -114,6 +116,26 @@ function main() {
     fileExists('src/main/job-ledger.js'),
     'PASS contract: src/main/job-ledger.js exists',
     'FAIL contract: missing src/main/job-ledger.js'
+  );
+  record(
+    has(/schemaFamily:\s*RENDER_REPORT_SCHEMA_FAMILY/, mainSource)
+      && has(/schemaVersion:\s*RENDER_REPORT_SCHEMA_VERSION/, mainSource),
+    'PASS main: render-report schemaFamily/schemaVersion stamping is present',
+    'FAIL main: render-report must stamp schemaFamily/schemaVersion'
+  );
+  record(
+    has(/DIAGNOSTICS_SCHEMA_VERSION/, diagnosticsSource)
+      && has(/DIAGNOSTICS_SCHEMA_FAMILY/, diagnosticsSource)
+      && has(/readDiagnosticsBundle\s*\(/, diagnosticsSource),
+    'PASS diagnostics: schema versioning/read contract is present',
+    'FAIL diagnostics: missing schema versioning/read contract'
+  );
+  record(
+    has(/JOB_LEDGER_SCHEMA_VERSION/, jobLedgerSource)
+      && has(/schema\.missing/, jobLedgerSource)
+      && has(/schema\.unsupported/, jobLedgerSource),
+    'PASS job-ledger: schema versioning + fail-safe schema logs are present',
+    'FAIL job-ledger: missing schema versioning fail-safe guards'
   );
 
   // E) path hardening helpers must exist

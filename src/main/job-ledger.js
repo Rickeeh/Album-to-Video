@@ -1,7 +1,8 @@
 const fs = require('fs');
 const path = require('path');
 
-const JOB_LEDGER_VERSION = 1;
+const JOB_LEDGER_SCHEMA_FAMILY = 'jobLedger';
+const JOB_LEDGER_SCHEMA_VERSION = 1;
 const JOB_LEDGER_STATE_IN_PROGRESS = 'IN_PROGRESS';
 const TERMINAL_STATES = new Set(['DONE', 'FAILED', 'CANCELLED']);
 
@@ -69,6 +70,62 @@ function listLedgerFiles(ledgerDir) {
   }
 }
 
+function logSchemaEvent({ logger, code, type, ledgerPath, schemaVersion = null, expectedSchemaVersion = null, redactPath }) {
+  const redact = typeof redactPath === 'function' ? redactPath : (v) => v;
+  const payload = {
+    type,
+    path: redact(ledgerPath),
+    schemaVersion,
+    expectedSchemaVersion,
+    schemaFamily: JOB_LEDGER_SCHEMA_FAMILY,
+  };
+  if (code === 'schema.missing') logger?.warn?.('schema.missing', payload);
+  else if (code === 'schema.unsupported') logger?.warn?.('schema.unsupported', payload);
+}
+
+function validateLedgerSchema(ledger, ledgerPath, { logger = null, redactPath = null } = {}) {
+  const schemaVersion = Number(ledger?.schemaVersion);
+  if (!Number.isFinite(schemaVersion)) {
+    logSchemaEvent({
+      logger,
+      code: 'schema.missing',
+      type: 'jobLedger',
+      ledgerPath,
+      schemaVersion: null,
+      expectedSchemaVersion: JOB_LEDGER_SCHEMA_VERSION,
+      redactPath,
+    });
+    return { ok: false, reason: 'schema_missing' };
+  }
+  if (schemaVersion !== JOB_LEDGER_SCHEMA_VERSION) {
+    logSchemaEvent({
+      logger,
+      code: 'schema.unsupported',
+      type: 'jobLedger',
+      ledgerPath,
+      schemaVersion,
+      expectedSchemaVersion: JOB_LEDGER_SCHEMA_VERSION,
+      redactPath,
+    });
+    return { ok: false, reason: 'schema_unsupported' };
+  }
+
+  if (String(ledger?.schemaFamily || '') !== JOB_LEDGER_SCHEMA_FAMILY) {
+    logSchemaEvent({
+      logger,
+      code: 'schema.unsupported',
+      type: 'jobLedger',
+      ledgerPath,
+      schemaVersion,
+      expectedSchemaVersion: JOB_LEDGER_SCHEMA_VERSION,
+      redactPath,
+    });
+    return { ok: false, reason: 'schema_family_unsupported' };
+  }
+
+  return { ok: true, schemaVersion };
+}
+
 function createJobLedger({
   ledgerDir,
   jobId,
@@ -84,7 +141,8 @@ function createJobLedger({
   const ledgerPath = path.join(ledgerDir, `job-ledger-${safeJobId}.json`);
 
   const ledger = {
-    version: JOB_LEDGER_VERSION,
+    schemaFamily: JOB_LEDGER_SCHEMA_FAMILY,
+    schemaVersion: JOB_LEDGER_SCHEMA_VERSION,
     jobId: String(jobId || ''),
     createdAt: new Date().toISOString(),
     exportFolder: resolvePathSafe(exportFolder),
@@ -112,6 +170,11 @@ function completeJobLedger({ ledgerPath, status, cleanupComplete = true, reasonC
   }
 
   const current = readJsonFile(ledgerPath);
+  const schemaCheck = validateLedgerSchema(current, ledgerPath);
+  if (!schemaCheck.ok) {
+    throw new Error(`Unsupported job ledger schema (${schemaCheck.reason}) for ${ledgerPath}`);
+  }
+
   const next = {
     ...current,
     state: normalizedStatus,
@@ -179,6 +242,17 @@ function recoverInProgressLedgers({
       continue;
     }
 
+    const schemaCheck = validateLedgerSchema(ledger, ledgerPath, { logger, redactPath });
+    if (!schemaCheck.ok) {
+      summary.invalidLedgers += 1;
+      logger?.warn?.('job.recovery.detected', {
+        ledgerPath: redact(ledgerPath),
+        valid: false,
+        reason: schemaCheck.reason,
+      });
+      continue;
+    }
+
     const state = String(ledger?.state || '');
     if (state !== JOB_LEDGER_STATE_IN_PROGRESS) continue;
     const exportFolder = String(ledger?.exportFolder || '');
@@ -198,6 +272,7 @@ function recoverInProgressLedgers({
       jobId: ledger?.jobId || null,
       exportFolder: redact(exportFolder),
       state,
+      schemaVersion: JOB_LEDGER_SCHEMA_VERSION,
     });
 
     const candidates = buildRecoveryDeleteCandidates(ledger);
@@ -246,6 +321,7 @@ function recoverInProgressLedgers({
       exportFolder: redact(exportFolder),
       deletedTmpCount: deleted,
       blockedOutsideBaseCount: blocked,
+      schemaVersion: JOB_LEDGER_SCHEMA_VERSION,
     });
 
     safeUnlink(ledgerPath);
@@ -255,11 +331,13 @@ function recoverInProgressLedgers({
 }
 
 module.exports = {
-  JOB_LEDGER_VERSION,
+  JOB_LEDGER_SCHEMA_FAMILY,
+  JOB_LEDGER_SCHEMA_VERSION,
   JOB_LEDGER_STATE_IN_PROGRESS,
   getJobLedgerDir,
   createJobLedger,
   completeJobLedger,
   deleteJobLedger,
   recoverInProgressLedgers,
+  validateLedgerSchema,
 };

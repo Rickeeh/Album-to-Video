@@ -243,6 +243,15 @@ function runPerfSnapshotContractTest() {
       && source.includes('startupRecoveryPromise'),
     'Perf snapshot: expected crash-safe job ledger lifecycle + startup recovery wiring.'
   );
+  assertOk(
+    source.includes('schemaFamily: RENDER_REPORT_SCHEMA_FAMILY')
+      && source.includes('schemaVersion: RENDER_REPORT_SCHEMA_VERSION'),
+    'Perf snapshot: expected render report schemaFamily/schemaVersion stamping.'
+  );
+  assertOk(
+    source.includes('schema.missing') && source.includes('schema.unsupported'),
+    'Perf snapshot: expected schema.missing/schema.unsupported structured logs in main flow.'
+  );
   console.log('OK: perf snapshot contract present in render report + diagnostics export');
 }
 

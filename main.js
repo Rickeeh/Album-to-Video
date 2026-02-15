@@ -7,7 +7,13 @@ const crypto = require('crypto');
 const { spawn } = require('child_process');
 const { cleanupJob } = require('./src/main/cleanup');
 const { createSessionLogger } = require('./src/main/logger');
-const { exportDiagnosticsBundle, MAX_LOG_EVENTS, redactSensitivePathSegments } = require('./src/main/diagnostics');
+const {
+  exportDiagnosticsBundle,
+  MAX_LOG_EVENTS,
+  RENDER_REPORT_SCHEMA_FAMILY,
+  RENDER_REPORT_SCHEMA_VERSION,
+  redactSensitivePathSegments,
+} = require('./src/main/diagnostics');
 const { createEngineFsm } = require('./src/main/engine-fsm');
 const {
   getJobLedgerDir,
@@ -1900,7 +1906,7 @@ registerIpcHandler('export-diagnostics', async (_event, payload) => {
     startup_probe: buildEnginePathProbe(),
   };
 
-  const { diagnosticsPath } = await exportDiagnosticsBundle({
+  const { diagnosticsPath, schemaEvents } = await exportDiagnosticsBundle({
     destinationDir,
     appInfo,
     engineInfo,
@@ -1913,6 +1919,13 @@ registerIpcHandler('export-diagnostics', async (_event, payload) => {
     finalizeSummary: latestFinalizeSummary,
     progressStatusTail: getRenderSignalsTail(MAX_LOG_EVENTS),
   });
+  if (Array.isArray(schemaEvents)) {
+    schemaEvents.forEach((event) => {
+      const code = String(event?.code || '');
+      if (code === 'schema.missing') sessionLogger?.warn?.('schema.missing', event);
+      else if (code === 'schema.unsupported') sessionLogger?.warn?.('schema.unsupported', event);
+    });
+  }
   sessionLogger?.info?.('diagnostics.exported', { diagnosticsPath, requestedExportFolder: requestedExportFolder || null });
   return { ok: true, diagnosticsPath };
 });
@@ -2516,6 +2529,8 @@ registerIpcHandler('render-album', async (event, payload) => {
   };
   const jobStartedAtMs = Date.now();
   const report = {
+    schemaFamily: RENDER_REPORT_SCHEMA_FAMILY,
+    schemaVersion: RENDER_REPORT_SCHEMA_VERSION,
     appVersion: app.getVersion(),
     electronVersion: process.versions.electron,
     os: buildOsDescriptor(),

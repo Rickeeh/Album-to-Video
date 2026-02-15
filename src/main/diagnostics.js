@@ -3,6 +3,10 @@ const path = require('path');
 
 const MAX_LOG_EVENTS = 200;
 const MAX_RENDER_REPORT_BYTES = 256 * 1024; // 256 KiB
+const RENDER_REPORT_SCHEMA_FAMILY = 'renderReport';
+const RENDER_REPORT_SCHEMA_VERSION = 1;
+const DIAGNOSTICS_SCHEMA_FAMILY = 'diagnostics';
+const DIAGNOSTICS_SCHEMA_VERSION = 1;
 
 function ensureDir(dirPath) {
   fs.mkdirSync(dirPath, { recursive: true });
@@ -31,6 +35,87 @@ function sanitizeValue(value) {
   const out = {};
   for (const [k, v] of Object.entries(value)) out[k] = sanitizeValue(v);
   return out;
+}
+
+function makeSchemaEvent({ code, type, filePath, schemaVersion = null, expectedSchemaVersion = null }) {
+  return sanitizeValue({
+    code,
+    type,
+    path: filePath || null,
+    schemaVersion,
+    expectedSchemaVersion,
+  });
+}
+
+function validateSchemaEnvelope({
+  artifactType,
+  parsed,
+  filePath,
+  expectedSchemaFamily,
+  expectedSchemaVersion,
+}) {
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return {
+      ok: false,
+      code: 'schema.unsupported',
+      reason: 'invalid_object',
+      event: makeSchemaEvent({
+        code: 'schema.unsupported',
+        type: artifactType,
+        filePath,
+        schemaVersion: null,
+        expectedSchemaVersion,
+      }),
+    };
+  }
+
+  const schemaVersion = Number(parsed.schemaVersion);
+  if (!Number.isFinite(schemaVersion)) {
+    return {
+      ok: false,
+      code: 'schema.missing',
+      reason: 'missing_schema_version',
+      event: makeSchemaEvent({
+        code: 'schema.missing',
+        type: artifactType,
+        filePath,
+        schemaVersion: null,
+        expectedSchemaVersion,
+      }),
+    };
+  }
+
+  if (schemaVersion !== expectedSchemaVersion) {
+    return {
+      ok: false,
+      code: 'schema.unsupported',
+      reason: 'unsupported_schema_version',
+      event: makeSchemaEvent({
+        code: 'schema.unsupported',
+        type: artifactType,
+        filePath,
+        schemaVersion,
+        expectedSchemaVersion,
+      }),
+    };
+  }
+
+  if (String(parsed.schemaFamily || '') !== expectedSchemaFamily) {
+    return {
+      ok: false,
+      code: 'schema.unsupported',
+      reason: 'unsupported_schema_family',
+      event: makeSchemaEvent({
+        code: 'schema.unsupported',
+        type: artifactType,
+        filePath,
+        schemaVersion,
+        expectedSchemaVersion,
+      }),
+    };
+  }
+
+  return { ok: true, schemaVersion };
 }
 
 function readSessionTail(sessionLogPath, maxEvents = MAX_LOG_EVENTS) {
@@ -92,7 +177,7 @@ function findLastLogPayload(events, messageName) {
   return null;
 }
 
-function readRenderReport(renderReportPath) {
+function readRenderReport(renderReportPath, schemaEvents = []) {
   if (!renderReportPath || !fs.existsSync(renderReportPath)) {
     return {
       reportPath: sanitizeValue(renderReportPath || null),
@@ -124,6 +209,27 @@ function readRenderReport(renderReportPath) {
     }
     const raw = fs.readFileSync(renderReportPath, 'utf8');
     const parsed = JSON.parse(raw);
+    const schemaCheck = validateSchemaEnvelope({
+      artifactType: 'renderReport',
+      parsed,
+      filePath: renderReportPath,
+      expectedSchemaFamily: RENDER_REPORT_SCHEMA_FAMILY,
+      expectedSchemaVersion: RENDER_REPORT_SCHEMA_VERSION,
+    });
+    if (!schemaCheck.ok) {
+      if (schemaCheck.event) schemaEvents.push(schemaCheck.event);
+      return {
+        reportPath: sanitizeValue(renderReportPath),
+        found: true,
+        included: false,
+        reason: schemaCheck.code === 'schema.missing' ? 'schema_missing' : 'schema_unsupported',
+        schemaVersion: Number.isFinite(Number(parsed?.schemaVersion)) ? Number(parsed.schemaVersion) : null,
+        expectedSchemaVersion: RENDER_REPORT_SCHEMA_VERSION,
+        sizeBytes: stat.size,
+        report: null,
+      };
+    }
+
     return {
       reportPath: sanitizeValue(renderReportPath),
       found: true,
@@ -139,6 +245,56 @@ function readRenderReport(renderReportPath) {
       reason: 'read_error',
       readError: String(err?.message || err),
       report: null,
+    };
+  }
+}
+
+function readDiagnosticsBundle(diagnosticsPath) {
+  if (!diagnosticsPath || !fs.existsSync(diagnosticsPath)) {
+    return {
+      diagnosticsPath: sanitizeValue(diagnosticsPath || null),
+      found: false,
+      supported: false,
+      diagnostics: null,
+      schemaEvent: null,
+    };
+  }
+
+  try {
+    const raw = fs.readFileSync(diagnosticsPath, 'utf8');
+    const parsed = JSON.parse(raw);
+    const schemaCheck = validateSchemaEnvelope({
+      artifactType: 'diagnostics',
+      parsed,
+      filePath: diagnosticsPath,
+      expectedSchemaFamily: DIAGNOSTICS_SCHEMA_FAMILY,
+      expectedSchemaVersion: DIAGNOSTICS_SCHEMA_VERSION,
+    });
+    if (!schemaCheck.ok) {
+      return {
+        diagnosticsPath: sanitizeValue(diagnosticsPath),
+        found: true,
+        supported: false,
+        diagnostics: null,
+        schemaEvent: schemaCheck.event || null,
+      };
+    }
+    return {
+      diagnosticsPath: sanitizeValue(diagnosticsPath),
+      found: true,
+      supported: true,
+      diagnostics: sanitizeValue(parsed),
+      schemaEvent: null,
+    };
+  } catch (err) {
+    return {
+      diagnosticsPath: sanitizeValue(diagnosticsPath),
+      found: true,
+      supported: false,
+      diagnostics: null,
+      reason: 'read_error',
+      readError: String(err?.message || err),
+      schemaEvent: null,
     };
   }
 }
@@ -159,12 +315,15 @@ async function exportDiagnosticsBundle({
   if (!destinationDir) throw new Error('Missing destinationDir for diagnostics export.');
   ensureDir(destinationDir);
 
+  const schemaEvents = [];
   const logs = readSessionTail(sessionLogPath, maxLogEvents);
   const normalizedProgressStatusTail = normalizeProgressStatusTail(progressStatusTail, maxLogEvents);
   const startupFromLogs = findLastLogPayload(logs.events, 'startup.partial_scan');
   const finalizeFromLogs = findLastLogPayload(logs.events, 'finalize.summary');
 
   const diagnostics = sanitizeValue({
+    schemaFamily: DIAGNOSTICS_SCHEMA_FAMILY,
+    schemaVersion: DIAGNOSTICS_SCHEMA_VERSION,
     generatedAt: new Date().toISOString(),
     app: appInfo || {},
     engine: {
@@ -180,18 +339,23 @@ async function exportDiagnosticsBundle({
       startupJobRecovery: startupJobRecovery || null,
       finalizeSummary: finalizeSummary || finalizeFromLogs || null,
     },
-    render: readRenderReport(renderReportPath),
+    render: readRenderReport(renderReportPath, schemaEvents),
   });
 
   const diagnosticsPath = path.join(destinationDir, 'diagnostics.json');
   fs.writeFileSync(diagnosticsPath, `${JSON.stringify(diagnostics, null, 2)}\n`, 'utf8');
-  return { diagnosticsPath, diagnostics };
+  return { diagnosticsPath, diagnostics, schemaEvents: schemaEvents.map((event) => sanitizeValue(event)) };
 }
 
 module.exports = {
   MAX_LOG_EVENTS,
   MAX_RENDER_REPORT_BYTES,
+  RENDER_REPORT_SCHEMA_FAMILY,
+  RENDER_REPORT_SCHEMA_VERSION,
+  DIAGNOSTICS_SCHEMA_FAMILY,
+  DIAGNOSTICS_SCHEMA_VERSION,
   exportDiagnosticsBundle,
+  readDiagnosticsBundle,
   redactSensitivePathSegments,
   sanitizeValue,
 };
