@@ -139,6 +139,18 @@ function main() {
     'FAIL main: expected structured bin.integrity.fail logging'
   );
   record(
+    has(/bin\.integrity\.bypassed/, mainSource)
+      && has(/BIN_INTEGRITY_BYPASS_ENV/, mainSource),
+    'PASS main: emergency bypass logging + env guard are present',
+    'FAIL main: expected BIN_INTEGRITY_BYPASS_ENV bypass guard and bin.integrity.bypassed log'
+  );
+  record(
+    has(/BIN_INTEGRITY_BYPASS/, mainSource)
+      && has(/isDiagnosticsOnlyIntegrityMode\s*\(/, mainSource),
+    'PASS main: diagnostics-only render block under bypass is present',
+    'FAIL main: expected diagnostics-only render block for integrity bypass'
+  );
+  record(
     has(/if\s*\(\s*!app\.isPackaged\s*\)/, mainSource)
       && has(/require\(['"]ffmpeg-static['"]\)/, mainSource)
       && has(/require\(['"]@ffprobe-installer\/ffprobe['"]\)/, mainSource),

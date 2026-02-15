@@ -15,7 +15,7 @@
     "dist:win": "npm run verify:win-bins && electron-builder --win nsis portable --x64 --publish never && npm run verify:packaged-bins -- --platform win32 --arch x64",
     "release:win": "npm run dist:win && npm run release:hash",
     "test:smoke": "node scripts/smoke-test.js",
-    "test:e2e": "node tests/e2e/render.test.js && node tests/e2e/hardening.test.js && node tests/e2e/diagnostics.test.js && node tests/e2e/perf-capture-parser.test.js && node tests/e2e/engine-fsm.test.js && node tests/e2e/binaries-contract.test.js",
+    "test:e2e": "node tests/e2e/render.test.js && node tests/e2e/hardening.test.js && node tests/e2e/diagnostics.test.js && node tests/e2e/perf-capture-parser.test.js && node tests/e2e/engine-fsm.test.js && node tests/e2e/binaries-contract.test.js && node tests/e2e/binary-integrity-airbag.test.js",
     "test": "npm run test:smoke && npm run test:e2e",
     "verify:win-bins": "node scripts/verify-win-binaries.js",
     "verify:packaged-bins": "node scripts/verify-packaged-binaries.js",

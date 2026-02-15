@@ -14,6 +14,12 @@ const {
   getBinaryContractKey,
   getBinaryContractTarget,
 } = require('./src/main/binaries-contract');
+const {
+  BIN_INTEGRITY_BYPASS_ENV,
+  isBinaryIntegrityBypassEnabled,
+  decideBinaryIntegrityFailureAction,
+  isDiagnosticsOnlyIntegrityMode,
+} = require('./src/main/binary-integrity-airbag');
 const { getPreset, listPresets } = require('./src/main/presets');
 
 let mainWindow = null;
@@ -152,6 +158,8 @@ let binaryIntegritySnapshot = {
   isPackaged: null,
   contractVersion: BINARY_CONTRACT_VERSION,
   contractKey: null,
+  bypassEnabled: false,
+  bypassUsed: false,
   ffmpegSha256: null,
   ffprobeSha256: null,
   failureCode: null,
@@ -263,6 +271,8 @@ function buildEnginePathProbe() {
     appIsPackaged: app.isPackaged,
     contractVersion: BINARY_CONTRACT_VERSION,
     contractKey: getBinaryContractKey(),
+    integrityBypassEnvVar: BIN_INTEGRITY_BYPASS_ENV,
+    integrityBypassEnabled: isBinaryIntegrityBypassEnabled(),
     execPath: process.execPath || null,
     resourcesPath,
     expectedWinFfmpegPath,
@@ -290,6 +300,9 @@ function getEngineBinariesSnapshot() {
     BINARY_CONTRACT_KEY: binaryIntegritySnapshot.contractKey || getBinaryContractKey(),
     BINARY_INTEGRITY_CHECKED: Boolean(binaryIntegritySnapshot.checked),
     BINARY_INTEGRITY_OK: binaryIntegritySnapshot.ok,
+    BINARY_INTEGRITY_BYPASS_ENV: BIN_INTEGRITY_BYPASS_ENV,
+    BINARY_INTEGRITY_BYPASS_ENABLED: Boolean(binaryIntegritySnapshot.bypassEnabled),
+    BINARY_INTEGRITY_BYPASS_USED: Boolean(binaryIntegritySnapshot.bypassUsed),
     BINARY_INTEGRITY_FAILURE_CODE: binaryIntegritySnapshot.failureCode || null,
     BINARY_INTEGRITY_FAILURE_REASON: binaryIntegritySnapshot.failureReason || null,
   };
@@ -323,6 +336,8 @@ async function verifyBinaryIntegrityContract({ strictPackaged = app.isPackaged }
     isPackaged: Boolean(app.isPackaged),
     contractVersion: BINARY_CONTRACT_VERSION,
     contractKey,
+    bypassEnabled: isBinaryIntegrityBypassEnabled(),
+    bypassUsed: false,
     ffmpegSha256: null,
     ffprobeSha256: null,
     failureCode: null,
@@ -443,6 +458,37 @@ async function ensureBinaryIntegrityContract({ strictPackaged = app.isPackaged }
       return snapshot;
     } catch (err) {
       const details = err?.details && typeof err.details === 'object' ? err.details : {};
+      const decision = decideBinaryIntegrityFailureAction({
+        isPackaged: app.isPackaged,
+        strictPackaged,
+      });
+      if (decision.action === 'BYPASS') {
+        const bypassSnapshot = {
+          ...binaryIntegritySnapshot,
+          checked: true,
+          ok: false,
+          isPackaged: Boolean(app.isPackaged),
+          contractVersion: BINARY_CONTRACT_VERSION,
+          contractKey: getBinaryContractKey(process.platform, process.arch),
+          bypassEnabled: true,
+          bypassUsed: true,
+          failureCode: String(err?.code || 'BIN_INTEGRITY_UNKNOWN'),
+          failureReason: String(err?.message || err),
+        };
+        binaryIntegritySnapshot = bypassSnapshot;
+        sessionLogger?.warn?.('bin.integrity.bypassed', {
+          code: bypassSnapshot.failureCode,
+          message: bypassSnapshot.failureReason,
+          contractVersion: BINARY_CONTRACT_VERSION,
+          contractKey: bypassSnapshot.contractKey,
+          integrityBypassEnvVar: BIN_INTEGRITY_BYPASS_ENV,
+          integrityBypassEnabled: true,
+          diagnosticsOnly: true,
+          ...details,
+        });
+        return bypassSnapshot;
+      }
+
       binaryIntegritySnapshot = {
         ...binaryIntegritySnapshot,
         checked: true,
@@ -450,6 +496,8 @@ async function ensureBinaryIntegrityContract({ strictPackaged = app.isPackaged }
         isPackaged: Boolean(app.isPackaged),
         contractVersion: BINARY_CONTRACT_VERSION,
         contractKey: getBinaryContractKey(process.platform, process.arch),
+        bypassEnabled: decision.bypassEnabled,
+        bypassUsed: false,
         failureCode: String(err?.code || 'BIN_INTEGRITY_UNKNOWN'),
         failureReason: String(err?.message || err),
       };
@@ -495,6 +543,7 @@ const REASON_CODES = Object.freeze({
   TIMEOUT: 'TIMEOUT',
   FFMPEG_EXIT_NONZERO: 'FFMPEG_EXIT_NONZERO',
   PROBE_FAILED: 'PROBE_FAILED',
+  BIN_INTEGRITY_BYPASS: 'BIN_INTEGRITY_BYPASS',
   UNCAUGHT: 'UNCAUGHT',
 });
 
@@ -1362,6 +1411,9 @@ function humanMessageForReason(code, err) {
   if (code === REASON_CODES.FFMPEG_EXIT_NONZERO) {
     return 'Encoding failed for at least one track. Try again, or enable debug logging for details.';
   }
+  if (code === REASON_CODES.BIN_INTEGRITY_BYPASS) {
+    return 'Integrity bypass is active (diagnostics mode). Rendering is disabled until packaging is fixed.';
+  }
 
   if (/No tracks to export/i.test(raw)) return 'No tracks selected. Add at least one audio file.';
   if (/Missing cover art/i.test(raw)) return 'Cover art is missing. Choose an image before exporting.';
@@ -1384,6 +1436,7 @@ function reasonCodeFromError(err) {
   if (err.code === 'TIMEOUT') return REASON_CODES.TIMEOUT;
   if (err.code === 'UNSUPPORTED_AUDIO') return REASON_CODES.PROBE_FAILED;
   if (err.code === 'FFMPEG_FAILED') return REASON_CODES.FFMPEG_EXIT_NONZERO;
+  if (err.code === 'BIN_INTEGRITY_BYPASS') return REASON_CODES.BIN_INTEGRITY_BYPASS;
   return REASON_CODES.UNCAUGHT;
 }
 
@@ -1569,6 +1622,20 @@ app.whenReady().then(() => {
             ffmpegSha256: integrity.ffmpegSha256,
             ffprobeSha256: integrity.ffprobeSha256,
           });
+        } else if (integrity?.bypassUsed === true) {
+          sessionLogger.warn('bin.integrity.diagnostics_mode', {
+            contractVersion: integrity.contractVersion,
+            contractKey: integrity.contractKey,
+            integrityBypassEnvVar: BIN_INTEGRITY_BYPASS_ENV,
+            integrityBypassEnabled: true,
+            diagnosticsOnly: true,
+          });
+          try {
+            dialog.showErrorBox(
+              'Integrity bypass active (diagnostics mode)',
+              `Binary mismatch was bypassed via ${BIN_INTEGRITY_BYPASS_ENV}=1.\nRendering is disabled. Export diagnostics and fix packaging.`
+            );
+          } catch {}
         } else {
           sessionLogger.warn('bin.integrity.warn', {
             contractVersion: integrity?.contractVersion || BINARY_CONTRACT_VERSION,
@@ -2399,6 +2466,7 @@ registerIpcHandler('render-album', async (event, payload) => {
     binaryContractVersion: engineBinariesSnapshot.BINARY_CONTRACT_VERSION,
     binaryContractKey: engineBinariesSnapshot.BINARY_CONTRACT_KEY,
     binaryIntegrityOk: engineBinariesSnapshot.BINARY_INTEGRITY_OK,
+    binaryIntegrityBypassUsed: Boolean(engineBinariesSnapshot.BINARY_INTEGRITY_BYPASS_USED),
     presetKey: plan.presetKey,
     presetDecisions: plan.presetDecisions || null,
     payload: sanitizePayload(payload),
@@ -2428,6 +2496,7 @@ registerIpcHandler('render-album', async (event, payload) => {
       encodeMsTotal: 0,
       finalizeMs: null,
       engineFinalState: null,
+      binaryIntegrityBypassUsed: Boolean(engineBinariesSnapshot.BINARY_INTEGRITY_BYPASS_USED),
       ffmpegSpawnMs: {
         count: 0,
         min: null,
@@ -2518,6 +2587,14 @@ registerIpcHandler('render-album', async (event, payload) => {
   };
 
   try {
+    if (isDiagnosticsOnlyIntegrityMode(binaryIntegritySnapshot)) {
+      const e = new Error(
+        `Integrity bypass active (diagnostics mode). Rendering disabled. Remove ${BIN_INTEGRITY_BYPASS_ENV} and fix packaging.`
+      );
+      e.code = REASON_CODES.BIN_INTEGRITY_BYPASS;
+      throw e;
+    }
+
     transitionEngineState('WARMING_UP', { reason: 'render_job_start' });
     try {
       await runFfmpegWarmupOnce();

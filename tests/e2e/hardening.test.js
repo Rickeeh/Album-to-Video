@@ -224,9 +224,17 @@ function runPerfSnapshotContractTest() {
     'Perf snapshot: expected render report to include ffmpegSha256/ffprobeSha256.'
   );
   assertOk(
+    source.includes('binaryIntegrityBypassUsed'),
+    'Perf snapshot: expected render report/perf snapshot to include binaryIntegrityBypassUsed stamp.'
+  );
+  assertOk(
     source.includes('ensureBinaryIntegrityContract({ strictPackaged: app.isPackaged })')
       && source.includes('bin.integrity.fail'),
     'Perf snapshot: expected packaged binary integrity enforcement + structured failure log.'
+  );
+  assertOk(
+    source.includes('bin.integrity.bypassed') && source.includes('BIN_INTEGRITY_BYPASS'),
+    'Perf snapshot: expected explicit integrity bypass logging + diagnostics-only render block.'
   );
   console.log('OK: perf snapshot contract present in render report + diagnostics export');
 }
