@@ -1,6 +1,6 @@
-# album-to-video-app
+# fRender
 
-Desktop Electron app that converts one or more audio tracks plus a static cover image into MP4 videos with predictable, offline rendering via bundled FFmpeg/FFprobe.
+fRender is a deterministic desktop publisher for audio-to-video exports: static cover image, one or more audio tracks, bundled FFmpeg/FFprobe, and a strict 1 FPS policy for predictable output.
 
 ## Requirements
 
@@ -19,6 +19,7 @@ npm start
 - Para fazer release, siga `docs/release-checklist.md`.
 - Windows requer bins vendorizados + `verify:win-bins`.
 - Logs por sessão em `%APPDATA%/.../logs/...` (ver `logger.ready`).
+- Compatibilidade de paths: logs/diagnostics mantêm pastas legadas em disco (`Album-to-Video`) por enquanto.
 
 ## Merge PRs #1-#5 in order
 
@@ -39,9 +40,13 @@ npm run dist
 Platform-specific packages:
 
 ```bash
-npm run dist:mac   # universal .dmg + .zip (requires vendored mac binaries)
+npm run dist:mac:arm64  # macOS arm64 .dmg + .zip + manifest
+npm run dist:mac:x64    # macOS x64 .dmg + .zip + manifest
+npm run dist:mac        # builds arm64 then x64
 npm run dist:win   # nsis installer + portable .exe
 ```
+
+Artifact naming uses `fRender-<version>-<os>-<arch>.<ext>` (ex: `fRender-1.0.0-mac-arm64.dmg`).
 
 If you only want unpacked output:
 
@@ -61,13 +66,15 @@ GitHub Actions runs tests and packaging on macOS + Windows.
   - `APPLE_TEAM_ID`
 - If secrets are missing, CI still builds unsigned mac artifacts.
 
-Universal macOS build notes:
+Dual-arch macOS build notes:
 
 - Vendor binaries under `resources/bin/darwin-x64` and `resources/bin/darwin-arm64`.
 - On each architecture, run `npm run bootstrap:mac-bins` to refresh local vendored binaries.
 - Bootstrap is idempotent by default. Use `npm run bootstrap:mac-bins -- --force` to overwrite.
-- `npm run verify:mac-bins` checks all required binaries before `dist:mac`.
-- `build.mac.x64ArchFiles` is set for `Contents/Resources/bin/**` in universal merge.
+- `npm run verify:mac-bins` checks all required binaries before every mac build.
+- Outputs are isolated per target:
+  - `dist/mac-arm64/*`
+  - `dist/mac-x64/*`
 
 Windows build contract (deterministic / vendored):
 

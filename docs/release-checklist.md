@@ -1,4 +1,4 @@
-# Release Checklist — Album to Video (Deterministic Publisher)
+# Release Checklist — fRender (Deterministic Publisher)
 
 ## Princípios (não-negociáveis)
 
@@ -21,7 +21,9 @@ Executar:
 - `npm run verify:win-bins` ✅ (Windows: presença + integridade + SHA256 pinado)
 - `npm run dist:win` ✅ (gera instalador/portable Windows)
 - `npm run release:win` ✅ (gera `dist` + `SHA256SUMS.txt`)
-- `npm run dist:mac` ✅ (se aplicável)
+- `npm run dist:mac:arm64` ✅ (gera `dist/mac-arm64` + manifest)
+- `npm run dist:mac:x64` ✅ (gera `dist/mac-x64` + manifest)
+- Confirmar naming dos artefactos: `fRender-<version>-mac-arm64.*`, `fRender-<version>-mac-x64.*`, `fRender-<version>-win-x64.*`
 
 `FAIL = parar. Não “tentar na sorte”.`
 

@@ -1,7 +1,7 @@
 # UI Manual Test Checklist (Per Preset)
 
 Date: 2026-02-09
-App: Album to Video
+App: fRender
 Scope: renderer UI flow validation for each preset
 
 ## Shared setup
