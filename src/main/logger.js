@@ -31,7 +31,13 @@ function rotateLogs(logDir, keepLatest) {
 }
 
 function createSessionLogger(app, opts = {}) {
-  app.setAppLogsPath();
+  if (opts.logsRootName) {
+    const currentLogsRoot = app.getPath('logs');
+    const logsBase = path.dirname(currentLogsRoot);
+    app.setAppLogsPath(path.join(logsBase, opts.logsRootName));
+  } else {
+    app.setAppLogsPath();
+  }
   const logsRoot = app.getPath('logs');
   const appLogDir = path.join(logsRoot, opts.appFolderName || 'Album-to-Video');
   ensureDir(appLogDir);

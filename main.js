@@ -44,6 +44,9 @@ let latestStartupPartialScan = null;
 let latestFinalizeSummary = null;
 let latestJobRecoverySummary = null;
 let startupRecoveryPromise = Promise.resolve();
+// Branding strategy A (safe): keep on-disk app log paths unchanged.
+const LEGACY_LOGS_ROOT_NAME = 'Album to Video';
+const LEGACY_LOG_SUBDIR_NAME = 'Album-to-Video';
 
 if (process.platform === 'win32') {
   try {
@@ -762,10 +765,15 @@ function ensureWritableDir(dirPath) {
   }
 }
 
+function resolveLegacyLogsRootPath() {
+  const currentLogsRoot = app.getPath('logs');
+  return path.join(path.dirname(currentLogsRoot), LEGACY_LOGS_ROOT_NAME);
+}
+
 function getAppLogDir() {
-  app.setAppLogsPath();
+  app.setAppLogsPath(resolveLegacyLogsRootPath());
   const logsRoot = app.getPath('logs');
-  const appLogDir = path.join(logsRoot, 'Album-to-Video');
+  const appLogDir = path.join(logsRoot, LEGACY_LOG_SUBDIR_NAME);
   ensureDir(appLogDir);
   return appLogDir;
 }
@@ -853,7 +861,7 @@ function createDebugLogger(exportFolder) {
     streamErrored = true;
   });
 
-  log(`Album to Video export log`);
+  log(`fRender export log`);
   log(`Started: ${new Date().toISOString()}`);
   log(`FFMPEG_BIN: ${FFMPEG_BIN}`);
   log(`FFPROBE_BIN: ${FFPROBE_BIN}`);
@@ -1539,9 +1547,7 @@ function writeRenderReport(exportFolder, report) {
 }
 
 function writeNonSuccessRenderReportToAppLogs(jobId, report) {
-  app.setAppLogsPath();
-  const logsRoot = app.getPath('logs');
-  const appLogDir = path.join(logsRoot, 'Album-to-Video');
+  const appLogDir = getAppLogDir();
   ensureDir(appLogDir);
   const safeJobId = sanitizeFileBaseName(jobId || `cancel-${formatTimestampForFile()}`);
   const reportPath = path.join(appLogDir, `render-report-${safeJobId}.json`);
@@ -1649,7 +1655,11 @@ app.whenReady().then(() => {
   // Keep window creation first; non-UI startup work runs after the window begins loading.
   setTimeout(async () => {
     try {
-      sessionLogger = createSessionLogger(app, { appFolderName: 'Album-to-Video', keepLatest: 20 });
+      sessionLogger = createSessionLogger(app, {
+        appFolderName: LEGACY_LOG_SUBDIR_NAME,
+        logsRootName: LEGACY_LOGS_ROOT_NAME,
+        keepLatest: 20,
+      });
       sessionLogger.info('app.ready', {
         appVersion: app.getVersion(),
         electronVersion: process.versions.electron,

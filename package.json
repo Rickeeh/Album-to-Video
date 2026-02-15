@@ -1,8 +1,8 @@
 {
-  "name": "album-to-video-app",
+  "name": "frender",
   "version": "1.0.0",
-  "author": "Ricky",
-  "description": "Convert audio albums into videos",
+  "author": "Cudell Media Systems",
+  "description": "Deterministic audio-to-video publisher with static cover art and 1 FPS policy",
   "main": "main.js",
   "type": "commonjs",
   "scripts": {
@@ -41,8 +41,8 @@
     "music-metadata": "^11.10.6"
   },
   "build": {
-    "appId": "com.albumtovideo.app",
-    "productName": "Album to Video",
+    "appId": "com.cudellmediasystems.frender",
+    "productName": "fRender",
     "asar": true,
     "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
     "afterPack": "scripts/electron-builder-after-pack.js",
@@ -69,6 +69,10 @@
     ],
     "mac": {
       "category": "public.app-category.music",
+      "extendInfo": {
+        "CFBundleName": "fRender",
+        "CFBundleDisplayName": "fRender"
+      },
       "hardenedRuntime": true,
       "gatekeeperAssess": false,
       "files": [
@@ -121,6 +125,8 @@
       ]
     },
     "win": {
+      "publisherName": "Cudell Media Systems",
+      "legalTrademarks": "Cudell Media Systems",
       "extraResources": [
         {
           "from": "resources/bin/win32",

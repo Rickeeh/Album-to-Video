@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<title>Album to Video</title>
+<title>fRender</title>
 <style>
   :root{
     --bg:#0c0f14;
@@ -39,6 +39,7 @@
   .topbar{ display:flex; align-items:flex-start; justify-content:space-between; gap:13px; margin-bottom:var(--topbarGap); }
   .title{ font-size:20px; font-weight:900; letter-spacing:0.2px; }
   .subtitle{ font-size:13px; color:var(--muted); margin-top:6px; max-width:860px; line-height:1.35; }
+  .subtitle .byline{ display:block; margin-top:2px; font-size:11px; letter-spacing:0.2px; opacity:0.92; }
   .topActions{ display:flex; gap:13px; align-items:center; flex-wrap:wrap; }
   .grid{
     display:grid;
@@ -363,8 +364,8 @@
 <div class="appShell">
 <div class="topbar">
   <div>
-    <div class="title">Album to Video</div>
-    <div class="subtitle">Turn cover art and audio files into clean MP4 exports.</div>
+    <div class="title">fRender</div>
+    <div class="subtitle">Turn cover art and audio files into clean MP4 exports.<span class="byline">by Cudell Media Systems</span></div>
   </div>
   <div class="topActions">
     <button class="secondary" id="btnNewAlbum">New</button>
