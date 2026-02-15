@@ -20,6 +20,7 @@
     "verify:win-bins": "node scripts/verify-win-binaries.js",
     "verify:invariants": "node scripts/verify-invariants.js",
     "verify:all": "npm run test && npm run verify:win-bins && npm run verify:invariants",
+    "perf:capture:mac": "node scripts/perf-capture-mac.js",
     "release:hash": "node scripts/release-sha256.js"
   },
   "devDependencies": {
