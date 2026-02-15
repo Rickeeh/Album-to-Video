@@ -1345,7 +1345,7 @@ function createWindow() {
   });
   mainWindow.webContents.once('did-finish-load', () => perfMark('loadURL.end'));
   perfMark('loadURL.start', { url: 'index.html' });
-  mainWindow.loadFile('index.html');
+  mainWindow.loadFile(path.join(__dirname, 'index.html'));
 }
 
 app.whenReady().then(() => {
