@@ -20,6 +20,7 @@
     --azGap:16px;
     --azTop:16px;
     --azDividerGap:18px;
+    --bottomInset:16px;
   }
   *{ box-sizing:border-box; }
   html, body{
@@ -323,12 +324,14 @@
   .settingsCard .row.first{ margin-top:0; }
   .settingsCard .inline{ margin-top:10px; gap:12px; }
   .settingsCard .kv{ margin-top:10px; }
+  .settingsCard .actionRow{ margin-top:var(--bottomInset); }
   .settingsCard select{ width:min(240px, 100%); }
   .settingsCard #releaseFolderSection{ min-width:0; }
   .settingsCard #albumName{ width:210px; }
   .settingsCard .progressWrap{
     border-top:1px solid rgba(255,255,255,0.08);
     padding-top:12px;
+    padding-bottom:var(--bottomInset);
   }
   .settingsCard .statusLine{ margin:0 0 8px 0; }
 
