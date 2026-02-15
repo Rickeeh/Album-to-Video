@@ -335,7 +335,7 @@
   .settingsCard .subSection{ margin-top:var(--subSectionGap); }
   .settingsCard .inline{ margin-top:10px; gap:12px; }
   .settingsCard .kv{ margin-top:calc(var(--subSectionGap) - 2px); }
-  .settingsCard .actionRow{ margin-top:var(--bottomInset); }
+  .settingsCard .actionRow{ margin-top:calc(var(--bottomInset) - 8px); }
   .settingsCard select{ width:min(240px, 100%); }
   .settingsCard #releaseFolderSection{ min-width:0; }
   .settingsCard #albumName{ width:210px; }
@@ -345,6 +345,7 @@
     padding-top:12px;
     padding-bottom:0;
   }
+  .settingsCard .actionZone .progressWrap{ margin-top:calc(var(--azDividerGap) - var(--azGap) + 4px); }
   .settingsCard .statusLine{ margin:0 0 6px 0; }
 
   .actionZone{
