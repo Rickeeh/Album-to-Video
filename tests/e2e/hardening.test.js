@@ -56,11 +56,18 @@ async function waitUntil(checkFn, { timeoutMs = 5000, intervalMs = 50, timeoutMe
 function runProgressTruthPolicyTest() {
   const source = fs.readFileSync(mainJsPath, 'utf8');
   const findRenderProgressEventWithPhaseAfter = (phase, startIdx) => {
-    const marker = 'sendRenderProgress(event.sender, {';
+    const markers = [
+      'sendRenderProgress(event.sender, {',
+      'emitRenderProgressSafe({',
+    ];
     let cursor = Math.max(0, Number(startIdx) || 0);
     while (cursor >= 0) {
-      const eventIdx = source.indexOf(marker, cursor);
-      if (eventIdx < 0) return -1;
+      const hits = markers
+        .map((marker) => ({ marker, idx: source.indexOf(marker, cursor) }))
+        .filter((h) => h.idx >= 0)
+        .sort((a, b) => a.idx - b.idx);
+      if (!hits.length) return -1;
+      const { marker, idx: eventIdx } = hits[0];
       const endMatch = source.slice(eventIdx).match(/\}\);\s*/);
       const blockEnd = endMatch
         ? eventIdx + endMatch.index + endMatch[0].length
@@ -190,6 +197,14 @@ function runPerfSnapshotContractTest() {
       && source.includes("sessionLogger?.info?.('ffmpeg.first_write'")
       && source.includes("sessionLogger?.info?.('ffmpeg.first_progress'"),
     'Perf snapshot: expected structured logs ffmpeg.warmup.done/ffmpeg.first_write/ffmpeg.first_progress.'
+  );
+  assertOk(
+    source.includes('createEngineFsm') && source.includes('engineFinalState'),
+    'Perf snapshot: expected explicit engine FSM and engineFinalState snapshot.'
+  );
+  assertOk(
+    source.includes('assertCanEmitProgress()') && source.includes('assertCanMutateMetrics'),
+    'Perf snapshot: expected FSM guards for post-terminal progress and metrics mutation.'
   );
   assertOk(
     source.includes('Math.max(0, firstWriteAtMs - ffmpegSpawnedAtMs)')

@@ -7,6 +7,7 @@ const { spawn } = require('child_process');
 const { cleanupJob } = require('./src/main/cleanup');
 const { createSessionLogger } = require('./src/main/logger');
 const { exportDiagnosticsBundle, MAX_LOG_EVENTS, redactSensitivePathSegments } = require('./src/main/diagnostics');
+const { createEngineFsm } = require('./src/main/engine-fsm');
 const { getPreset, listPresets } = require('./src/main/presets');
 
 let mainWindow = null;
@@ -286,6 +287,7 @@ const GLOBAL_FPS = 1;
 
 const currentJob = {
   id: null,
+  fsm: null,
   ffmpeg: null,
   cancelled: false,
   cancelReason: null,
@@ -1523,6 +1525,7 @@ registerIpcHandler('probe-audio', async (_event, filePath) => {
 // ---------------- Render job (album-level) ----------------
 registerIpcHandler('cancel-render', async () => {
   if (!currentJob.active) return true;
+  if (currentJob.fsm?.isTerminal?.()) return true;
   currentJob.cancelled = true;
   currentJob.cancelReason = REASON_CODES.CANCELLED;
   await cleanupJob(currentJob.id, REASON_CODES.CANCELLED, currentJob.cleanupContext);
@@ -1582,6 +1585,7 @@ registerIpcHandler('export-diagnostics', async (_event, payload) => {
 
 function runFfmpegStillImage({
   event,
+  emitProgress,
   audioPath,
   outputPath,
   progressOutputPath,
@@ -1842,7 +1846,7 @@ function runFfmpegStillImage({
         }
       }
 
-      sendRenderProgress(event.sender, buildProgressPayload({
+      const payload = buildProgressPayload({
         percentTrack,
         phase,
         isFinal,
@@ -1850,7 +1854,9 @@ function runFfmpegStillImage({
         progressSignal,
         hasRealSignal: hasSignal || jobSignalSeen,
         nowMs,
-      }));
+      });
+      if (typeof emitProgress === 'function') emitProgress(payload);
+      else sendRenderProgress(event.sender, payload);
       lastProgressEmitAtMs = nowMs;
     };
     const args = [
@@ -2073,10 +2079,15 @@ registerIpcHandler('render-album', async (event, payload) => {
   const jobId = plan.jobId;
   const exportFolder = plan.exportFolder;
   const selectedExportFolder = resolveExistingDirectoryPath(lastSelectedExportFolder, 'Selected export folder');
+  const engineFsm = createEngineFsm({
+    jobId,
+    onTransition: (entry) => sessionLogger?.info?.('engine.state', entry),
+  });
   currentJob.cancelled = false;
   currentJob.cancelReason = null;
   currentJob.active = true;
   currentJob.id = jobId;
+  currentJob.fsm = engineFsm;
   currentJob.cleanupContext = {
     cleanedUp: false,
     cleanupStats: null,
@@ -2185,6 +2196,7 @@ registerIpcHandler('render-album', async (event, payload) => {
       hasRealSignal: false,
       encodeMsTotal: 0,
       finalizeMs: null,
+      engineFinalState: null,
       ffmpegSpawnMs: {
         count: 0,
         min: null,
@@ -2208,7 +2220,10 @@ registerIpcHandler('render-album', async (event, payload) => {
     },
   };
   let reportPath = null;
+  let perfLocked = false;
   const updatePerfSnapshot = ({ finalizeSummary = null, finalizeMs = null } = {}) => {
+    if (perfLocked) return;
+    engineFsm.assertCanMutateMetrics('report.perf');
     const ffmpegSpawnAvg = ffmpegSpawnMsCount > 0 ? Math.round(ffmpegSpawnMsTotal / ffmpegSpawnMsCount) : null;
     const firstWriteAvg = firstWriteMsCount > 0 ? Math.round(firstWriteMsTotal / firstWriteMsCount) : null;
     const firstProgressAvg = firstProgressMsCount > 0 ? Math.round(firstProgressMsTotal / firstProgressMsCount) : null;
@@ -2222,6 +2237,7 @@ registerIpcHandler('render-album', async (event, payload) => {
       hasRealSignal: Boolean(jobHasRealSignal),
       encodeMsTotal: Math.max(0, Math.floor(encodeMsTotal)),
       finalizeMs: safeFinalizeMs,
+      engineFinalState: report.perf.engineFinalState || null,
       ffmpegSpawnMs: {
         count: ffmpegSpawnMsCount,
         min: ffmpegSpawnMsMin,
@@ -2244,8 +2260,44 @@ registerIpcHandler('render-album', async (event, payload) => {
       finalizeSummary: finalizeSummary ? { ...finalizeSummary } : report.perf.finalizeSummary,
     };
   };
+  const transitionEngineState = (nextState, meta = {}) => engineFsm.transition(nextState, meta);
+  const emitRenderProgressSafe = (progressPayload) => {
+    engineFsm.assertCanEmitProgress();
+    sendRenderProgress(event.sender, progressPayload);
+  };
+  const commitTerminalEngineState = (nextState, meta = {}) => {
+    const target = String(nextState || '').toUpperCase();
+    if (engineFsm.isTerminal()) {
+      const existing = engineFsm.getState();
+      if (existing !== target) {
+        const conflict = new Error(`Engine terminal state conflict: ${existing} -> ${target}`);
+        conflict.code = 'ENGINE_TERMINAL_STATE_CONFLICT';
+        conflict.fromState = existing;
+        conflict.toState = target;
+        throw conflict;
+      }
+      report.perf.engineFinalState = existing;
+      perfLocked = true;
+      return existing;
+    }
+    const finalState = transitionEngineState(target, meta);
+    report.perf.engineFinalState = finalState;
+    perfLocked = true;
+    return finalState;
+  };
 
   try {
+    transitionEngineState('WARMING_UP', { reason: 'render_job_start' });
+    try {
+      await runFfmpegWarmupOnce();
+    } catch (warmErr) {
+      sessionLogger?.warn?.('ffmpeg.warmup.await_failed', {
+        jobId,
+        message: String(warmErr?.message || warmErr),
+      });
+    }
+    transitionEngineState('STARTING', { reason: 'warmup_complete' });
+
     if (debug) {
       debugLogger = createDebugLogger(exportFolder);
       currentJob.cleanupContext.stagingPaths.add(debugLogger.path);
@@ -2261,7 +2313,7 @@ registerIpcHandler('render-album', async (event, payload) => {
         jobTotalMs,
       });
     }
-    sendRenderProgress(event.sender, {
+    emitRenderProgressSafe({
       trackIndex: 0,
       trackCount: Math.max(1, tracks.length),
       phase: 'PREPARING',
@@ -2279,6 +2331,7 @@ registerIpcHandler('render-album', async (event, payload) => {
       indeterminate: false,
       isFinal: false,
     });
+    transitionEngineState('ENCODING', { trackCount: tracks.length });
 
     if (debugLogger) {
       debugLogger.log(`[probe] tracks=${tracks.length} totalDurationSec=${totalDurationSec.toFixed(3)} known=${totalDurationKnown}`);
@@ -2337,6 +2390,7 @@ registerIpcHandler('render-album', async (event, payload) => {
       try {
         runResult = await runFfmpegStillImage({
           event,
+          emitProgress: emitRenderProgressSafe,
           audioPath,
           outputPath: partialPath,
           progressOutputPath: outputFinalPath,
@@ -2372,6 +2426,7 @@ registerIpcHandler('render-album', async (event, payload) => {
 
         runResult = await runFfmpegStillImage({
           event,
+          emitProgress: emitRenderProgressSafe,
           audioPath,
           outputPath: partialPath,
           progressOutputPath: outputFinalPath,
@@ -2481,6 +2536,7 @@ registerIpcHandler('render-album', async (event, payload) => {
       }
     }
 
+    transitionEngineState('FINALIZING', { renderedCountSoFar: rendered.length });
     sendRenderStatus(event.sender, { phase: 'finalizing' });
     const finalizingAtMs = Date.now();
     const finalProgressModel = jobProgressModels.has('MEDIA')
@@ -2492,7 +2548,7 @@ registerIpcHandler('render-album', async (event, payload) => {
     const finalizingRaw = finalProgressModel === 'WALLCLOCK'
       ? Math.max(0, Math.min(0.999, (finalizingAtMs - jobStartedAtMs) / finalJobExpectedWorkMs))
       : Math.max(0, Math.min(0.999, jobDoneMs / Math.max(1, jobTotalMs)));
-    sendRenderProgress(event.sender, {
+    emitRenderProgressSafe({
       trackIndex: Math.max(0, tracks.length - 1),
       trackCount: Math.max(1, tracks.length),
       phase: 'FINALIZING',
@@ -2557,6 +2613,7 @@ registerIpcHandler('render-album', async (event, payload) => {
     report.job.humanMessage = 'Render completed successfully.';
     report.job.endTs = new Date().toISOString();
     report.job.durationMs = Date.now() - jobStartedAtMs;
+    report.perf.engineFinalState = 'DONE';
     updatePerfSnapshot({ finalizeMs: Date.now() - finalizeStartedAtMs });
     reportPath = writeRenderReport(exportFolder, report);
     finalizeSummary.reportMs = Date.now() - reportStartedAtMs;
@@ -2585,9 +2642,11 @@ registerIpcHandler('render-album', async (event, payload) => {
       exdevFallbackCount,
       ...finalizeSummary,
     });
+    commitTerminalEngineState('DONE', { reason: 'render_success' });
     sessionLogger?.info?.('render.perf_summary', {
       jobId,
       trackCount: tracks.length,
+      engineFinalState: report.perf.engineFinalState,
       encodeMsTotal: Math.max(0, Math.floor(encodeMsTotal)),
       finalizeMsTotal: Math.max(0, Math.floor(finalizeSummary.totalMs)),
       ffmpegSpawnMs: {
@@ -2634,6 +2693,7 @@ registerIpcHandler('render-album', async (event, payload) => {
     report.job.endTs = new Date().toISOString();
     report.job.durationMs = Date.now() - jobStartedAtMs;
     updatePerfSnapshot();
+    commitTerminalEngineState(reasonCode === REASON_CODES.CANCELLED ? 'CANCELLED' : 'FAILED', { reasonCode });
 
     const lastTrack = report.tracks[report.tracks.length - 1];
     if (lastTrack && !lastTrack.endTs) {
@@ -2688,5 +2748,6 @@ registerIpcHandler('render-album', async (event, payload) => {
     currentJob.cancelReason = null;
     currentJob.cleanupContext = null;
     currentJob.id = null;
+    currentJob.fsm = null;
   }
 });
