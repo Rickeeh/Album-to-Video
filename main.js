@@ -3,11 +3,17 @@ const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+const crypto = require('crypto');
 const { spawn } = require('child_process');
 const { cleanupJob } = require('./src/main/cleanup');
 const { createSessionLogger } = require('./src/main/logger');
 const { exportDiagnosticsBundle, MAX_LOG_EVENTS, redactSensitivePathSegments } = require('./src/main/diagnostics');
 const { createEngineFsm } = require('./src/main/engine-fsm');
+const {
+  BINARY_CONTRACT_VERSION,
+  getBinaryContractKey,
+  getBinaryContractTarget,
+} = require('./src/main/binaries-contract');
 const { getPreset, listPresets } = require('./src/main/presets');
 
 let mainWindow = null;
@@ -139,6 +145,18 @@ let FFPROBE_SOURCE = null;
 let binariesResolved = false;
 let ffmpegWarmupPromise = null;
 let ffmpegWarmupDurationMs = null;
+let binaryIntegrityPromise = null;
+let binaryIntegritySnapshot = {
+  checked: false,
+  ok: null,
+  isPackaged: null,
+  contractVersion: BINARY_CONTRACT_VERSION,
+  contractKey: null,
+  ffmpegSha256: null,
+  ffprobeSha256: null,
+  failureCode: null,
+  failureReason: null,
+};
 let musicMetadataModule = null;
 
 function isReadableFile(filePath) {
@@ -243,6 +261,8 @@ function buildEnginePathProbe() {
 
   return {
     appIsPackaged: app.isPackaged,
+    contractVersion: BINARY_CONTRACT_VERSION,
+    contractKey: getBinaryContractKey(),
     execPath: process.execPath || null,
     resourcesPath,
     expectedWinFfmpegPath,
@@ -264,20 +284,195 @@ function getEngineBinariesSnapshot() {
     FFPROBE_PATH: FFPROBE_BIN || null,
     FFMPEG_BIN: Boolean(FFMPEG_BIN),
     FFPROBE_BIN: Boolean(FFPROBE_BIN),
+    FFMPEG_SHA256: binaryIntegritySnapshot.ffmpegSha256 || null,
+    FFPROBE_SHA256: binaryIntegritySnapshot.ffprobeSha256 || null,
+    BINARY_CONTRACT_VERSION: binaryIntegritySnapshot.contractVersion || BINARY_CONTRACT_VERSION,
+    BINARY_CONTRACT_KEY: binaryIntegritySnapshot.contractKey || getBinaryContractKey(),
+    BINARY_INTEGRITY_CHECKED: Boolean(binaryIntegritySnapshot.checked),
+    BINARY_INTEGRITY_OK: binaryIntegritySnapshot.ok,
+    BINARY_INTEGRITY_FAILURE_CODE: binaryIntegritySnapshot.failureCode || null,
+    BINARY_INTEGRITY_FAILURE_REASON: binaryIntegritySnapshot.failureReason || null,
   };
 }
 
-function getPinnedWinBinaryHashes() {
-  try {
-    // Optional source of truth used by verify:win-bins.
-    // This file may not exist in packaged runtime.
-    // eslint-disable-next-line global-require
-    const verify = require('./scripts/verify-win-binaries.js');
-    if (verify && verify.expectedSha256 && typeof verify.expectedSha256 === 'object') {
-      return verify.expectedSha256;
+function sha256FileStream(filePath) {
+  return new Promise((resolve, reject) => {
+    const hash = crypto.createHash('sha256');
+    const stream = fs.createReadStream(filePath);
+    stream.on('data', (chunk) => hash.update(chunk));
+    stream.on('error', reject);
+    stream.on('end', () => resolve(hash.digest('hex')));
+  });
+}
+
+function buildBinaryIntegrityError({ code, message, details }) {
+  const err = new Error(message);
+  err.code = code;
+  err.details = details;
+  return err;
+}
+
+async function verifyBinaryIntegrityContract({ strictPackaged = app.isPackaged } = {}) {
+  resolveBundledBinaries();
+  const contractKey = getBinaryContractKey(process.platform, process.arch);
+  const target = getBinaryContractTarget(process.platform, process.arch);
+
+  const result = {
+    checked: true,
+    ok: false,
+    isPackaged: Boolean(app.isPackaged),
+    contractVersion: BINARY_CONTRACT_VERSION,
+    contractKey,
+    ffmpegSha256: null,
+    ffprobeSha256: null,
+    failureCode: null,
+    failureReason: null,
+  };
+
+  if (!target || !target.ffmpeg || !target.ffprobe) {
+    if (strictPackaged) {
+      const details = {
+        contractKey,
+        platform: process.platform,
+        arch: process.arch,
+      };
+      throw buildBinaryIntegrityError({
+        code: 'BIN_INTEGRITY_CONTRACT_MISSING',
+        message: `Missing binary contract target for ${contractKey}.`,
+        details,
+      });
     }
-  } catch {}
-  return null;
+
+    result.ok = null;
+    result.failureCode = 'BIN_INTEGRITY_CONTRACT_MISSING';
+    result.failureReason = `No contract target for ${contractKey}`;
+    return result;
+  }
+
+  const checks = [
+    {
+      label: 'ffmpeg',
+      path: FFMPEG_BIN,
+      source: FFMPEG_SOURCE,
+      expectedSha256: target.ffmpeg.runtimeSha256 || target.ffmpeg.sha256 || null,
+      required: target.ffmpeg.required !== false,
+    },
+    {
+      label: 'ffprobe',
+      path: FFPROBE_BIN,
+      source: FFPROBE_SOURCE,
+      expectedSha256: target.ffprobe.runtimeSha256 || target.ffprobe.sha256 || null,
+      required: target.ffprobe.required !== false,
+    },
+  ];
+
+  const failures = [];
+
+  for (const check of checks) {
+    const actualPath = (typeof check.path === 'string' && check.path.length) ? check.path : null;
+    const required = Boolean(check.required);
+    if (!actualPath || !path.isAbsolute(actualPath) || !isReadableFile(actualPath)) {
+      if (required) {
+        failures.push({
+          binary: check.label,
+          reason: 'missing_binary',
+          path: actualPath,
+          expectedSha256: check.expectedSha256,
+        });
+      }
+      continue;
+    }
+
+    if (strictPackaged && check.source !== 'vendored') {
+      failures.push({
+        binary: check.label,
+        reason: 'unexpected_source',
+        path: actualPath,
+        source: check.source || null,
+        expectedSource: 'vendored',
+      });
+      continue;
+    }
+
+    const actualSha256 = await sha256FileStream(actualPath);
+    if (check.label === 'ffmpeg') result.ffmpegSha256 = actualSha256;
+    if (check.label === 'ffprobe') result.ffprobeSha256 = actualSha256;
+
+    if (check.expectedSha256 && actualSha256 !== check.expectedSha256) {
+      failures.push({
+        binary: check.label,
+        reason: 'sha256_mismatch',
+        path: actualPath,
+        source: check.source || null,
+        expectedSha256: check.expectedSha256,
+        actualSha256,
+      });
+    }
+  }
+
+  if (failures.length) {
+    const primary = failures[0];
+    result.failureCode = 'BIN_INTEGRITY_MISMATCH';
+    result.failureReason = `${primary.binary}:${primary.reason}`;
+    if (strictPackaged) {
+      throw buildBinaryIntegrityError({
+        code: result.failureCode,
+        message: 'Binary integrity contract mismatch.',
+        details: {
+          contractKey,
+          isPackaged: Boolean(app.isPackaged),
+          failures,
+        },
+      });
+    }
+    return result;
+  }
+
+  result.ok = true;
+  result.failureCode = null;
+  result.failureReason = null;
+  return result;
+}
+
+async function ensureBinaryIntegrityContract({ strictPackaged = app.isPackaged } = {}) {
+  if (binaryIntegrityPromise) return binaryIntegrityPromise;
+  binaryIntegrityPromise = (async () => {
+    try {
+      const snapshot = await verifyBinaryIntegrityContract({ strictPackaged });
+      binaryIntegritySnapshot = snapshot;
+      return snapshot;
+    } catch (err) {
+      const details = err?.details && typeof err.details === 'object' ? err.details : {};
+      binaryIntegritySnapshot = {
+        ...binaryIntegritySnapshot,
+        checked: true,
+        ok: false,
+        isPackaged: Boolean(app.isPackaged),
+        contractVersion: BINARY_CONTRACT_VERSION,
+        contractKey: getBinaryContractKey(process.platform, process.arch),
+        failureCode: String(err?.code || 'BIN_INTEGRITY_UNKNOWN'),
+        failureReason: String(err?.message || err),
+      };
+      sessionLogger?.error?.('bin.integrity.fail', {
+        code: String(err?.code || 'BIN_INTEGRITY_FAIL'),
+        message: String(err?.message || err),
+        contractVersion: BINARY_CONTRACT_VERSION,
+        contractKey: getBinaryContractKey(process.platform, process.arch),
+        ...details,
+      });
+      throw err;
+    }
+  })();
+  return binaryIntegrityPromise;
+}
+
+function getPinnedWinBinaryHashes() {
+  const target = getBinaryContractTarget('win32', 'x64');
+  if (!target || !target.ffmpeg || !target.ffprobe) return null;
+  return {
+    'ffmpeg.exe': target.ffmpeg.runtimeSha256 || target.ffmpeg.sha256 || null,
+    'ffprobe.exe': target.ffprobe.runtimeSha256 || target.ffprobe.sha256 || null,
+  };
 }
 
 // 🎯 Performance principle:
@@ -1354,7 +1549,7 @@ app.whenReady().then(() => {
   perfMark('app.ready');
   createWindow();
   // Keep window creation first; non-UI startup work runs after the window begins loading.
-  setTimeout(() => {
+  setTimeout(async () => {
     try {
       sessionLogger = createSessionLogger(app, { appFolderName: 'Album-to-Video', keepLatest: 20 });
       sessionLogger.info('app.ready', {
@@ -1365,6 +1560,34 @@ app.whenReady().then(() => {
       });
       seedSelectedExportFolderFromEnv();
       resolveBundledBinaries();
+      try {
+        const integrity = await ensureBinaryIntegrityContract({ strictPackaged: app.isPackaged });
+        if (integrity?.ok === true) {
+          sessionLogger.info('bin.integrity.ok', {
+            contractVersion: integrity.contractVersion,
+            contractKey: integrity.contractKey,
+            ffmpegSha256: integrity.ffmpegSha256,
+            ffprobeSha256: integrity.ffprobeSha256,
+          });
+        } else {
+          sessionLogger.warn('bin.integrity.warn', {
+            contractVersion: integrity?.contractVersion || BINARY_CONTRACT_VERSION,
+            contractKey: integrity?.contractKey || getBinaryContractKey(),
+            reason: integrity?.failureReason || 'integrity_not_enforced',
+          });
+        }
+      } catch (err) {
+        if (app.isPackaged) {
+          try {
+            dialog.showErrorBox(
+              'Binary Integrity Check Failed',
+              `Startup blocked: ${String(err?.message || err)}`
+            );
+          } catch {}
+          app.exit(1);
+          return;
+        }
+      }
       sessionLogger.info('engine.binaries', {
         ...getEngineBinariesSnapshot(),
       });
@@ -1552,6 +1775,7 @@ registerIpcHandler('export-diagnostics', async (_event, payload) => {
 
   const appLogDir = getAppLogDir();
   const sessionLogPath = sessionLogger?.filePath || findLatestSessionLogPath(appLogDir);
+  await ensureBinaryIntegrityContract({ strictPackaged: app.isPackaged });
   const appInfo = {
     appVersion: app.getVersion(),
     electronVersion: process.versions.electron,
@@ -2075,6 +2299,8 @@ registerIpcHandler('render-album', async (event, payload) => {
 
   sendRenderStatus(event.sender, { phase: 'planning' });
   const plan = await buildRenderPlan(payload);
+  await ensureBinaryIntegrityContract({ strictPackaged: app.isPackaged });
+  const engineBinariesSnapshot = getEngineBinariesSnapshot();
 
   const jobId = plan.jobId;
   const exportFolder = plan.exportFolder;
@@ -2164,10 +2390,15 @@ registerIpcHandler('render-album', async (event, payload) => {
     electronVersion: process.versions.electron,
     os: buildOsDescriptor(),
     arch: process.arch,
-    ffmpegPath: FFMPEG_BIN,
-    ffprobePath: FFPROBE_BIN,
-    ffmpegSource: FFMPEG_SOURCE,
-    ffprobeSource: FFPROBE_SOURCE,
+    ffmpegPath: engineBinariesSnapshot.FFMPEG_PATH,
+    ffprobePath: engineBinariesSnapshot.FFPROBE_PATH,
+    ffmpegSource: engineBinariesSnapshot.FFMPEG_SOURCE,
+    ffprobeSource: engineBinariesSnapshot.FFPROBE_SOURCE,
+    ffmpegSha256: engineBinariesSnapshot.FFMPEG_SHA256,
+    ffprobeSha256: engineBinariesSnapshot.FFPROBE_SHA256,
+    binaryContractVersion: engineBinariesSnapshot.BINARY_CONTRACT_VERSION,
+    binaryContractKey: engineBinariesSnapshot.BINARY_CONTRACT_KEY,
+    binaryIntegrityOk: engineBinariesSnapshot.BINARY_INTEGRITY_OK,
     presetKey: plan.presetKey,
     presetDecisions: plan.presetDecisions || null,
     payload: sanitizePayload(payload),

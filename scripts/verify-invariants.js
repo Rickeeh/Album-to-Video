@@ -71,10 +71,21 @@ function main() {
 
   // C) package scripts: dist:win must include verify:win-bins
   const distWinScript = String(packageJson?.scripts?.['dist:win'] || '');
+  const distMacScript = String(packageJson?.scripts?.['dist:mac'] || '');
   record(
     distWinScript.includes('verify:win-bins'),
     'PASS package.json: dist:win is gated by verify:win-bins',
     'FAIL package.json: dist:win must run verify:win-bins before electron-builder'
+  );
+  record(
+    distWinScript.includes('verify:packaged-bins'),
+    'PASS package.json: dist:win verifies packaged binary contract',
+    'FAIL package.json: dist:win must run verify:packaged-bins after build'
+  );
+  record(
+    distMacScript.includes('verify:packaged-bins'),
+    'PASS package.json: dist:mac verifies packaged binary contract',
+    'FAIL package.json: dist:mac must run verify:packaged-bins after build'
   );
 
   // D) vendored Windows binaries existence (if Windows build is configured)
@@ -93,6 +104,13 @@ function main() {
     });
   }
 
+  // D2) binary contract source of truth must exist
+  record(
+    fileExists('src/main/binaries-contract.js'),
+    'PASS contract: src/main/binaries-contract.js exists',
+    'FAIL contract: missing src/main/binaries-contract.js'
+  );
+
   // E) path hardening helpers must exist
   const helperChecks = [
     { name: 'assertAbsolutePath', re: /function\s+assertAbsolutePath\s*\(/ },
@@ -108,6 +126,25 @@ function main() {
       `FAIL main: helper ${name} is missing`
     );
   });
+
+  // E2) binary integrity runtime guardrails must exist
+  record(
+    has(/ensureBinaryIntegrityContract\s*\(\s*\{\s*strictPackaged:\s*app\.isPackaged\s*\}\s*\)/, mainSource),
+    'PASS main: packaged binary integrity is enforced at runtime',
+    'FAIL main: missing ensureBinaryIntegrityContract({ strictPackaged: app.isPackaged }) call'
+  );
+  record(
+    has(/bin\.integrity\.fail/, mainSource),
+    'PASS main: structured bin.integrity.fail logging is present',
+    'FAIL main: expected structured bin.integrity.fail logging'
+  );
+  record(
+    has(/if\s*\(\s*!app\.isPackaged\s*\)/, mainSource)
+      && has(/require\(['"]ffmpeg-static['"]\)/, mainSource)
+      && has(/require\(['"]@ffprobe-installer\/ffprobe['"]\)/, mainSource),
+    'PASS main: dependency fallback for ffmpeg/ffprobe is dev-only',
+    'FAIL main: dependency fallback for ffmpeg/ffprobe must be guarded by !app.isPackaged'
+  );
 
   // F) critical handlers must use hardened path resolution
   const handlerChecks = [

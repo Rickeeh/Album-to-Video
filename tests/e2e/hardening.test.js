@@ -215,6 +215,19 @@ function runPerfSnapshotContractTest() {
     source.includes('progressStatusTail: getRenderSignalsTail(MAX_LOG_EVENTS)'),
     'Perf snapshot: expected diagnostics export to include progress/status tail.'
   );
+  assertOk(
+    source.includes('FFMPEG_SHA256') && source.includes('FFPROBE_SHA256'),
+    'Perf snapshot: expected engine snapshot to include ffmpeg/ffprobe sha256 fields.'
+  );
+  assertOk(
+    source.includes('ffmpegSha256') && source.includes('ffprobeSha256'),
+    'Perf snapshot: expected render report to include ffmpegSha256/ffprobeSha256.'
+  );
+  assertOk(
+    source.includes('ensureBinaryIntegrityContract({ strictPackaged: app.isPackaged })')
+      && source.includes('bin.integrity.fail'),
+    'Perf snapshot: expected packaged binary integrity enforcement + structured failure log.'
+  );
   console.log('OK: perf snapshot contract present in render report + diagnostics export');
 }
 

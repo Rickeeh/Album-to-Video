@@ -1,13 +1,34 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const {
+  BINARY_CONTRACT_VERSION,
+  getBinaryContractTarget,
+} = require('../src/main/binaries-contract');
 
-const base = path.join(__dirname, '..', 'resources', 'bin', 'win32');
-const required = ['ffmpeg.exe', 'ffprobe.exe'];
+const base = path.join(__dirname, '..', 'resources', 'bin');
+const winTarget = getBinaryContractTarget('win32', 'x64');
+
+if (!winTarget || !winTarget.ffmpeg || !winTarget.ffprobe) {
+  throw new Error('Missing win32-x64 target in binaries contract.');
+}
+
+const required = [
+  {
+    name: 'ffmpeg.exe',
+    relPath: winTarget.ffmpeg.relPath,
+    expectedSha256: winTarget.ffmpeg.repoSha256 || winTarget.ffmpeg.sha256,
+  },
+  {
+    name: 'ffprobe.exe',
+    relPath: winTarget.ffprobe.relPath,
+    expectedSha256: winTarget.ffprobe.repoSha256 || winTarget.ffprobe.sha256,
+  },
+];
+
 const expectedSha256 = Object.freeze({
-  // Vendored from ffmpeg-8.0.1-essentials_build (gyan.dev package)
-  'ffmpeg.exe': '5af82a0d4fe2b9eae211b967332ea97edfc51c6b328ca35b827e73eac560dc0d',
-  'ffprobe.exe': '192a1d6899059765ac8c39764fc3148d4e6049955956dc2029f81f4bd6a8972d',
+  'ffmpeg.exe': winTarget.ffmpeg.repoSha256 || winTarget.ffmpeg.sha256,
+  'ffprobe.exe': winTarget.ffprobe.repoSha256 || winTarget.ffprobe.sha256,
 });
 
 function existsReadable(filePath) {
@@ -53,8 +74,8 @@ async function main() {
   const checksumMismatch = [];
   const report = [];
 
-  for (const name of required) {
-    const full = path.join(base, name);
+  for (const entry of required) {
+    const full = path.join(base, entry.relPath);
     if (!existsReadable(full)) {
       missing.push(full);
       continue;
@@ -62,7 +83,7 @@ async function main() {
     const pe = isPeExecutable(full);
     if (!pe) invalid.push(full);
     const digest = await sha256Stream(full);
-    const expected = expectedSha256[name];
+    const expected = entry.expectedSha256;
     const match = Boolean(expected && digest === expected);
     if (!match) {
       checksumMismatch.push({
@@ -85,6 +106,7 @@ async function main() {
 
   if (missing.length || invalid.length || checksumMismatch.length) {
     console.error('Missing or invalid vendored Windows binaries required for dist:win.');
+    console.error(`Contract version: ${BINARY_CONTRACT_VERSION}`);
     if (missing.length) {
       console.error('Missing:');
       missing.forEach((m) => console.error(`  - ${m}`));
@@ -101,11 +123,12 @@ async function main() {
         console.error(`    actual:   ${item.actual}`);
       });
     }
-    console.error('Expected files: resources/bin/win32/ffmpeg.exe and resources/bin/win32/ffprobe.exe');
+    console.error(`Expected files: ${required.map((entry) => path.join('resources', 'bin', entry.relPath)).join(' and ')}`);
     process.exit(1);
   }
 
   console.log('All required Windows vendored binaries are present.');
+  console.log(`Contract version: ${BINARY_CONTRACT_VERSION}`);
   report.forEach((r) => {
     console.log(`${r.file}`);
     console.log(`  sizeBytes=${r.sizeBytes}`);
