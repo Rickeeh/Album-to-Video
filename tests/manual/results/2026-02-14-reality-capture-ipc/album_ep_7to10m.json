@@ -1,0 +1,91 @@
+{
+  "name": "album_ep_7to10m",
+  "presetKey": "album_ep",
+  "elapsedMs": 962,
+  "outputPath": "/private/var/folders/q_/f7p3yfrs6fxfmhh_vl_2_ymc0000gn/T/album-to-video-reality-Q5GWfV/exports/album_ep_7to10m/01. Reality Album EP.mp4",
+  "outputDurationSec": 447.479,
+  "reportPath": "/var/folders/q_/f7p3yfrs6fxfmhh_vl_2_ymc0000gn/T/album-to-video-reality-Q5GWfV/exports/album_ep_7to10m/Logs/render-report.json",
+  "diagnosticsPath": "/private/var/folders/q_/f7p3yfrs6fxfmhh_vl_2_ymc0000gn/T/album-to-video-reality-Q5GWfV/exports/album_ep_7to10m/Logs/diagnostics.json",
+  "reportPerf": {
+    "jobTotalMs": 447503,
+    "jobDoneMs": 447503,
+    "hasRealSignal": true,
+    "encodeMsTotal": 912,
+    "finalizeMs": 1,
+    "ffmpegSpawnMs": {
+      "count": 1,
+      "min": 909,
+      "max": 909,
+      "avg": 909
+    },
+    "finalizeSummary": null
+  },
+  "trackAudioMode": "copy",
+  "trackFfmpegArgsTail": [
+    "yuv420p",
+    "-c:a",
+    "copy",
+    "-movflags",
+    "+faststart",
+    "-shortest",
+    "-loglevel",
+    "error",
+    "-progress",
+    "pipe:1",
+    "-nostats",
+    "-f",
+    "mp4",
+    "/private/var/folders/q_/f7p3yfrs6fxfmhh_vl_2_ymc0000gn/T/album-to-video-reality-Q5GWfV/exports/album_ep_7to10m/01. Reality Album EP.mp4.partial"
+  ],
+  "progressTail": [
+    {
+      "ts": "2026-02-14T19:49:01.299Z",
+      "phase": "PREPARING",
+      "progressModel": "WALLCLOCK",
+      "rawProgress": 0,
+      "jobElapsedMs": 0,
+      "jobExpectedWorkMs": 7000,
+      "progressSignal": "none"
+    },
+    {
+      "ts": "2026-02-14T19:49:01.459Z",
+      "phase": "ENCODING",
+      "progressModel": "WALLCLOCK",
+      "rawProgress": 0.022857142857142857,
+      "jobElapsedMs": 160,
+      "jobExpectedWorkMs": 7000,
+      "progressSignal": "none"
+    },
+    {
+      "ts": "2026-02-14T19:49:02.209Z",
+      "phase": "ENCODING",
+      "progressModel": "WALLCLOCK",
+      "rawProgress": 0.13,
+      "jobElapsedMs": 910,
+      "jobExpectedWorkMs": 7000,
+      "progressSignal": "time"
+    },
+    {
+      "ts": "2026-02-14T19:49:02.209Z",
+      "phase": "FINALIZING",
+      "progressModel": "WALLCLOCK",
+      "rawProgress": 0.13,
+      "jobElapsedMs": 910,
+      "jobExpectedWorkMs": 7000,
+      "progressSignal": "time"
+    },
+    {
+      "ts": "2026-02-14T19:49:02.212Z",
+      "phase": "FINALIZING",
+      "progressModel": "WALLCLOCK",
+      "rawProgress": 0.13042857142857142,
+      "jobElapsedMs": 913,
+      "jobExpectedWorkMs": 7000,
+      "progressSignal": "time"
+    }
+  ],
+  "progressModelSet": [
+    "WALLCLOCK"
+  ],
+  "progressEventCount": 5
+}

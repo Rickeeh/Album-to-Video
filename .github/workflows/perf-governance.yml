@@ -1,0 +1,55 @@
+name: Perf Governance
+
+on:
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+    inputs:
+      case_id:
+        description: 'Perf baseline case id'
+        required: false
+        default: 'album_small_wav'
+        type: string
+      runs:
+        description: 'Runs per case (median is used)'
+        required: false
+        default: '3'
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  verify-perf:
+    name: Verify Perf (nightly/manual)
+    runs-on: macos-14
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify perf baseline/budgets
+        run: npm run verify:perf
+        env:
+          PERF_MODE: engine
+          PERF_CASE_ID: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.case_id || '' }}
+          PERF_RUNS: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.runs || '3' }}
+
+      - name: Upload perf artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-governance-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            dist/perf/perf-run-result.json
+          if-no-files-found: warn

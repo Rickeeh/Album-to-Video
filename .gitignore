@@ -15,8 +15,6 @@ fixtures/out*
 album-to-video-app/
 index2.html
 index_BAK.html
-resources/bin/darwin-arm64/
-resources/bin/darwin-x64/
 
 # macOS
 .DS_Store

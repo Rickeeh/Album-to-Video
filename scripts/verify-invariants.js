@@ -74,6 +74,8 @@ function main() {
   // C) package scripts: dist:win must include verify:win-bins
   const distWinScript = String(packageJson?.scripts?.['dist:win'] || '');
   const distMacScript = String(packageJson?.scripts?.['dist:mac'] || '');
+  const distMacArm64Script = String(packageJson?.scripts?.['dist:mac:arm64'] || '');
+  const distMacX64Script = String(packageJson?.scripts?.['dist:mac:x64'] || '');
   record(
     distWinScript.includes('verify:win-bins'),
     'PASS package.json: dist:win is gated by verify:win-bins',
@@ -85,9 +87,19 @@ function main() {
     'FAIL package.json: dist:win must run verify:packaged-bins after build'
   );
   record(
-    distMacScript.includes('verify:packaged-bins'),
-    'PASS package.json: dist:mac verifies packaged binary contract',
-    'FAIL package.json: dist:mac must run verify:packaged-bins after build'
+    distMacArm64Script.includes('verify:packaged-bins'),
+    'PASS package.json: dist:mac:arm64 verifies packaged binary contract',
+    'FAIL package.json: dist:mac:arm64 must run verify:packaged-bins after build'
+  );
+  record(
+    distMacX64Script.includes('verify:packaged-bins'),
+    'PASS package.json: dist:mac:x64 verifies packaged binary contract',
+    'FAIL package.json: dist:mac:x64 must run verify:packaged-bins after build'
+  );
+  record(
+    distMacScript.includes('dist:mac:arm64') && distMacScript.includes('dist:mac:x64'),
+    'PASS package.json: dist:mac orchestrates arm64 + x64 builds',
+    'FAIL package.json: dist:mac must run dist:mac:arm64 and dist:mac:x64'
   );
 
   // D) vendored Windows binaries existence (if Windows build is configured)

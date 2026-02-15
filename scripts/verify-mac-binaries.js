@@ -91,7 +91,7 @@ async function main() {
 
   const missing = entries.filter((entry) => !isReadableFile(entry.abs));
   if (missing.length) {
-    console.error('Missing vendored mac binaries required for universal build:');
+    console.error('Missing vendored mac binaries required for dual-arch mac builds:');
     missing.forEach((entry) => console.error(`- ${entry.relPath}`));
     console.error('');
     console.error('Fix:');

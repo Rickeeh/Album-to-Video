@@ -1,0 +1,51 @@
+{
+  "schemaFamily": "perfBaseline",
+  "schemaVersion": 1,
+  "cases": [
+    {
+      "id": "album_small_wav",
+      "fixture": "fixtures/test.wav",
+      "image": "fixtures/test.jpg",
+      "presetKey": "album_ep",
+      "tracks": 1,
+      "runtimeBaselines": {
+        "darwin-arm64": {
+          "metricsBaseline": {
+            "ffmpegWarmupMs": 60,
+            "ffmpegSpawnMs": 450,
+            "firstWriteMs": 450,
+            "firstProgressMs": 450,
+            "encodeMsTotal": 1000,
+            "finalizeMsTotal": 20
+          },
+          "budgets": {
+            "encodeMsTotal": {
+              "maxRatio": 1.25,
+              "mode": "fail"
+            },
+            "finalizeMsTotal": {
+              "maxRatio": 1.35,
+              "mode": "fail"
+            },
+            "ffmpegSpawnMs": {
+              "maxRatio": 1.5,
+              "mode": "warn"
+            },
+            "firstWriteMs": {
+              "maxRatio": 1.5,
+              "mode": "warn"
+            },
+            "firstProgressMs": {
+              "maxRatio": 1.5,
+              "mode": "warn"
+            },
+            "ffmpegWarmupMs": {
+              "maxRatio": 3,
+              "mode": "warn"
+            }
+          }
+        }
+      }
+    }
+  ]
+}

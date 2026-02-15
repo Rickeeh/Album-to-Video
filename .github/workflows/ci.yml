@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       run_dist_mac_intel:
-        description: "Run optional dist:mac on Intel CI job"
+        description: "Run optional dist:mac:x64 on Intel CI job"
         required: false
         default: false
         type: boolean
@@ -16,7 +16,7 @@ on:
 jobs:
   macos-intel-x64:
     name: macOS Intel x64 CI
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.run_dist_mac_intel == 'true'
     runs-on: macos-12
 
     steps:
@@ -40,19 +40,19 @@ jobs:
       - name: Run tests
         run: npm run test
 
-      - name: Optional Intel dist:mac
-        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.run_dist_mac_intel == 'true' }}
-        run: npm run dist:mac
+      - name: Intel dist:mac:x64
+        run: npm run dist:mac:x64
 
       - name: Upload Intel mac artifacts
-        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.run_dist_mac_intel == 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: dist-macos-intel-x64
           path: |
-            dist/*.dmg
-            dist/*.zip
-            dist/*.blockmap
+            dist/mac-x64/*.dmg
+            dist/mac-x64/*.zip
+            dist/mac-x64/*.blockmap
+            dist/package/mac-x64/package-manifest.json
+            dist/package/mac-x64/package-manifest.txt
           if-no-files-found: error
 
   tests:
@@ -132,21 +132,90 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           CSC_IDENTITY_AUTO_DISCOVERY: "true"
 
+      - name: Verify packaged mac binaries (arm64)
+        if: runner.os == 'macOS'
+        run: npm run verify:packaged-bins -- --platform darwin --arch arm64 --root dist/mac-arm64
+
+      - name: Verify packaged mac binaries (x64)
+        if: runner.os == 'macOS'
+        run: npm run verify:packaged-bins -- --platform darwin --arch x64 --root dist/mac-x64
+
+      - name: Generate package manifest (macOS arm64)
+        if: runner.os == 'macOS'
+        run: npm run package:manifest -- --target dist/mac-arm64 --platform darwin --arch arm64 --out-dir dist/package/mac-arm64
+
+      - name: Generate package manifest (macOS x64)
+        if: runner.os == 'macOS'
+        run: npm run package:manifest -- --target dist/mac-x64 --platform darwin --arch x64 --out-dir dist/package/mac-x64
+
       - name: Build Windows installers
         if: runner.os == 'Windows'
         run: npm run dist:win
 
-      - name: Upload dist artifacts
+      - name: Generate package manifest (Windows)
+        if: runner.os == 'Windows'
+        run: npm run verify:package -- --target dist/win-unpacked --platform win32 --arch x64
+
+      - name: Upload macOS arm64 artifacts + manifest
+        if: runner.os == 'macOS'
         uses: actions/upload-artifact@v4
         with:
-          name: dist-${{ runner.os }}
+          name: dist-mac-arm64
           path: |
-            dist/*.dmg
-            dist/*.zip
+            dist/mac-arm64/*.dmg
+            dist/mac-arm64/*.zip
+            dist/mac-arm64/*.blockmap
+            dist/package/mac-arm64/package-manifest.json
+            dist/package/mac-arm64/package-manifest.txt
+          if-no-files-found: error
+
+      - name: Upload macOS x64 artifacts + manifest
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-mac-x64
+          path: |
+            dist/mac-x64/*.dmg
+            dist/mac-x64/*.zip
+            dist/mac-x64/*.blockmap
+            dist/package/mac-x64/package-manifest.json
+            dist/package/mac-x64/package-manifest.txt
+          if-no-files-found: error
+
+      - name: Upload Windows dist artifacts + manifest
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-Windows-x64
+          path: |
             dist/*.exe
             dist/*.7z
             dist/*.blockmap
+            dist/package/package-manifest.json
+            dist/package/package-manifest.txt
           if-no-files-found: error
+
+      - name: Upload package manifest
+        if: always() && runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: package-manifest-Windows
+          path: |
+            dist/package/package-manifest.json
+            dist/package/package-manifest.txt
+          if-no-files-found: warn
+
+      - name: Upload package manifests (macOS)
+        if: always() && runner.os == 'macOS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: package-manifest-macOS
+          path: |
+            dist/package/mac-arm64/package-manifest.json
+            dist/package/mac-arm64/package-manifest.txt
+            dist/package/mac-x64/package-manifest.json
+            dist/package/mac-x64/package-manifest.txt
+          if-no-files-found: warn
 
       - name: Upload packaging logs
         if: always()
@@ -156,6 +225,10 @@ jobs:
           path: |
             dist/builder-debug.yml
             dist/builder-effective-config.yaml
+            dist/mac-arm64/builder-debug.yml
+            dist/mac-arm64/builder-effective-config.yaml
+            dist/mac-x64/builder-debug.yml
+            dist/mac-x64/builder-effective-config.yaml
             dist/*.log
             npm-debug.log*
           if-no-files-found: warn

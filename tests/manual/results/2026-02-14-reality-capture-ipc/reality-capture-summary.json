@@ -1,0 +1,236 @@
+{
+  "generatedAt": "2026-02-14T19:49:01.251Z",
+  "runtimeRoot": "/var/folders/q_/f7p3yfrs6fxfmhh_vl_2_ymc0000gn/T/album-to-video-reality-Q5GWfV",
+  "artifactsDir": "/var/folders/q_/f7p3yfrs6fxfmhh_vl_2_ymc0000gn/T/album-to-video-reality-Q5GWfV/artifacts",
+  "cases": [
+    {
+      "name": "album_ep_7to10m",
+      "presetKey": "album_ep",
+      "elapsedMs": 962,
+      "outputPath": "/private/var/folders/q_/f7p3yfrs6fxfmhh_vl_2_ymc0000gn/T/album-to-video-reality-Q5GWfV/exports/album_ep_7to10m/01. Reality Album EP.mp4",
+      "outputDurationSec": 447.479,
+      "reportPath": "/var/folders/q_/f7p3yfrs6fxfmhh_vl_2_ymc0000gn/T/album-to-video-reality-Q5GWfV/exports/album_ep_7to10m/Logs/render-report.json",
+      "diagnosticsPath": "/private/var/folders/q_/f7p3yfrs6fxfmhh_vl_2_ymc0000gn/T/album-to-video-reality-Q5GWfV/exports/album_ep_7to10m/Logs/diagnostics.json",
+      "reportPerf": {
+        "jobTotalMs": 447503,
+        "jobDoneMs": 447503,
+        "hasRealSignal": true,
+        "encodeMsTotal": 912,
+        "finalizeMs": 1,
+        "ffmpegSpawnMs": {
+          "count": 1,
+          "min": 909,
+          "max": 909,
+          "avg": 909
+        },
+        "finalizeSummary": null
+      },
+      "trackAudioMode": "copy",
+      "trackFfmpegArgsTail": [
+        "yuv420p",
+        "-c:a",
+        "copy",
+        "-movflags",
+        "+faststart",
+        "-shortest",
+        "-loglevel",
+        "error",
+        "-progress",
+        "pipe:1",
+        "-nostats",
+        "-f",
+        "mp4",
+        "/private/var/folders/q_/f7p3yfrs6fxfmhh_vl_2_ymc0000gn/T/album-to-video-reality-Q5GWfV/exports/album_ep_7to10m/01. Reality Album EP.mp4.partial"
+      ],
+      "progressTail": [
+        {
+          "ts": "2026-02-14T19:49:01.299Z",
+          "phase": "PREPARING",
+          "progressModel": "WALLCLOCK",
+          "rawProgress": 0,
+          "jobElapsedMs": 0,
+          "jobExpectedWorkMs": 7000,
+          "progressSignal": "none"
+        },
+        {
+          "ts": "2026-02-14T19:49:01.459Z",
+          "phase": "ENCODING",
+          "progressModel": "WALLCLOCK",
+          "rawProgress": 0.022857142857142857,
+          "jobElapsedMs": 160,
+          "jobExpectedWorkMs": 7000,
+          "progressSignal": "none"
+        },
+        {
+          "ts": "2026-02-14T19:49:02.209Z",
+          "phase": "ENCODING",
+          "progressModel": "WALLCLOCK",
+          "rawProgress": 0.13,
+          "jobElapsedMs": 910,
+          "jobExpectedWorkMs": 7000,
+          "progressSignal": "time"
+        },
+        {
+          "ts": "2026-02-14T19:49:02.209Z",
+          "phase": "FINALIZING",
+          "progressModel": "WALLCLOCK",
+          "rawProgress": 0.13,
+          "jobElapsedMs": 910,
+          "jobExpectedWorkMs": 7000,
+          "progressSignal": "time"
+        },
+        {
+          "ts": "2026-02-14T19:49:02.212Z",
+          "phase": "FINALIZING",
+          "progressModel": "WALLCLOCK",
+          "rawProgress": 0.13042857142857142,
+          "jobElapsedMs": 913,
+          "jobExpectedWorkMs": 7000,
+          "progressSignal": "time"
+        }
+      ],
+      "progressModelSet": [
+        "WALLCLOCK"
+      ],
+      "progressEventCount": 5,
+      "artifactPath": "/var/folders/q_/f7p3yfrs6fxfmhh_vl_2_ymc0000gn/T/album-to-video-reality-Q5GWfV/artifacts/album_ep_7to10m.json"
+    },
+    {
+      "name": "longform_1h",
+      "presetKey": "longform",
+      "elapsedMs": 5857,
+      "outputPath": "/private/var/folders/q_/f7p3yfrs6fxfmhh_vl_2_ymc0000gn/T/album-to-video-reality-Q5GWfV/exports/longform_1h/01. Reality Longform 1h.mp4",
+      "outputDurationSec": 3600,
+      "reportPath": "/var/folders/q_/f7p3yfrs6fxfmhh_vl_2_ymc0000gn/T/album-to-video-reality-Q5GWfV/exports/longform_1h/Logs/render-report.json",
+      "diagnosticsPath": "/private/var/folders/q_/f7p3yfrs6fxfmhh_vl_2_ymc0000gn/T/album-to-video-reality-Q5GWfV/exports/longform_1h/Logs/diagnostics.json",
+      "reportPerf": {
+        "jobTotalMs": 3600000,
+        "jobDoneMs": 3600000,
+        "hasRealSignal": true,
+        "encodeMsTotal": 5845,
+        "finalizeMs": 1,
+        "ffmpegSpawnMs": {
+          "count": 1,
+          "min": 1010,
+          "max": 1010,
+          "avg": 1010
+        },
+        "finalizeSummary": null
+      },
+      "trackAudioMode": "copy",
+      "trackFfmpegArgsTail": [
+        "yuv420p",
+        "-c:a",
+        "copy",
+        "-movflags",
+        "+faststart",
+        "-shortest",
+        "-loglevel",
+        "error",
+        "-progress",
+        "pipe:1",
+        "-nostats",
+        "-f",
+        "mp4",
+        "/private/var/folders/q_/f7p3yfrs6fxfmhh_vl_2_ymc0000gn/T/album-to-video-reality-Q5GWfV/exports/longform_1h/01. Reality Longform 1h.mp4.partial"
+      ],
+      "progressTail": [
+        {
+          "ts": "2026-02-14T19:49:04.259Z",
+          "phase": "ENCODING",
+          "progressModel": "WALLCLOCK",
+          "rawProgress": 0.10075,
+          "jobElapsedMs": 2015,
+          "jobExpectedWorkMs": 20000,
+          "progressSignal": "time"
+        },
+        {
+          "ts": "2026-02-14T19:49:04.759Z",
+          "phase": "ENCODING",
+          "progressModel": "WALLCLOCK",
+          "rawProgress": 0.12575,
+          "jobElapsedMs": 2515,
+          "jobExpectedWorkMs": 20000,
+          "progressSignal": "time"
+        },
+        {
+          "ts": "2026-02-14T19:49:05.260Z",
+          "phase": "ENCODING",
+          "progressModel": "WALLCLOCK",
+          "rawProgress": 0.1508,
+          "jobElapsedMs": 3016,
+          "jobExpectedWorkMs": 20000,
+          "progressSignal": "time"
+        },
+        {
+          "ts": "2026-02-14T19:49:05.761Z",
+          "phase": "ENCODING",
+          "progressModel": "WALLCLOCK",
+          "rawProgress": 0.17585,
+          "jobElapsedMs": 3517,
+          "jobExpectedWorkMs": 20000,
+          "progressSignal": "time"
+        },
+        {
+          "ts": "2026-02-14T19:49:06.262Z",
+          "phase": "ENCODING",
+          "progressModel": "WALLCLOCK",
+          "rawProgress": 0.2009,
+          "jobElapsedMs": 4018,
+          "jobExpectedWorkMs": 20000,
+          "progressSignal": "time"
+        },
+        {
+          "ts": "2026-02-14T19:49:06.762Z",
+          "phase": "ENCODING",
+          "progressModel": "WALLCLOCK",
+          "rawProgress": 0.2259,
+          "jobElapsedMs": 4518,
+          "jobExpectedWorkMs": 20000,
+          "progressSignal": "time"
+        },
+        {
+          "ts": "2026-02-14T19:49:07.263Z",
+          "phase": "ENCODING",
+          "progressModel": "WALLCLOCK",
+          "rawProgress": 0.25095,
+          "jobElapsedMs": 5019,
+          "jobExpectedWorkMs": 20000,
+          "progressSignal": "time"
+        },
+        {
+          "ts": "2026-02-14T19:49:07.764Z",
+          "phase": "ENCODING",
+          "progressModel": "WALLCLOCK",
+          "rawProgress": 0.276,
+          "jobElapsedMs": 5520,
+          "jobExpectedWorkMs": 20000,
+          "progressSignal": "time"
+        },
+        {
+          "ts": "2026-02-14T19:49:08.086Z",
+          "phase": "FINALIZING",
+          "progressModel": "WALLCLOCK",
+          "rawProgress": 0.2921,
+          "jobElapsedMs": 5842,
+          "jobExpectedWorkMs": 20000,
+          "progressSignal": "time"
+        },
+        {
+          "ts": "2026-02-14T19:49:08.089Z",
+          "phase": "FINALIZING",
+          "progressModel": "WALLCLOCK",
+          "rawProgress": 0.29225,
+          "jobElapsedMs": 5845,
+          "jobExpectedWorkMs": 20000,
+          "progressSignal": "time"
+        }
+      ],
+      "progressModelSet": [
+        "WALLCLOCK"
+      ],
+      "progressEventCount": 10,
+      "artifactPath": "/var/folders/q_/f7p3yfrs6fxfmhh_vl_2_ymc0000gn/T/album-to-video-reality-Q5GWfV/artifacts/longform_1h.json"
+    }
+  ]
+}

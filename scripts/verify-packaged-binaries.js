@@ -51,34 +51,101 @@ function sha256Stream(filePath) {
   });
 }
 
-function findMacPackagedBinRoot() {
-  const macUniversalDir = path.join(rootDir, 'dist', 'mac-universal');
-  let appDirs = [];
+function isDirectory(dirPath) {
   try {
-    appDirs = fs.readdirSync(macUniversalDir)
-      .filter((name) => name.endsWith('.app'))
-      .sort();
+    return fs.statSync(dirPath).isDirectory();
   } catch {
-    appDirs = [];
+    return false;
   }
-
-  if (!appDirs.length) {
-    throw new Error(`No .app bundle found in ${macUniversalDir}. Run npm run dist:mac first.`);
-  }
-
-  return path.join(macUniversalDir, appDirs[0], 'Contents', 'Resources', 'bin');
 }
 
-function resolvePackagedBinRoot(platform, overrideRoot) {
+function findFirstAppBundle(searchRoot) {
+  if (!isDirectory(searchRoot)) return null;
+  const found = [];
+  const stack = [searchRoot];
+
+  while (stack.length) {
+    const current = stack.pop();
+    let entries = [];
+    try {
+      entries = fs.readdirSync(current, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const full = path.join(current, entry.name);
+      if (entry.name.endsWith('.app')) {
+        found.push(full);
+        continue;
+      }
+      stack.push(full);
+    }
+  }
+
+  if (!found.length) return null;
+  found.sort((a, b) => {
+    let aMtime = 0;
+    let bMtime = 0;
+    try { aMtime = fs.statSync(a).mtimeMs || 0; } catch {}
+    try { bMtime = fs.statSync(b).mtimeMs || 0; } catch {}
+    if (aMtime !== bMtime) return bMtime - aMtime;
+    return a.localeCompare(b);
+  });
+  return found[0];
+}
+
+function toMacBinRoot(appBundlePath) {
+  return path.join(appBundlePath, 'Contents', 'Resources', 'bin');
+}
+
+function findMacPackagedBinRoot(archArg) {
+  const arch = String(archArg || 'universal').toLowerCase();
+  const searchDirs = [];
+
+  if (arch === 'arm64') {
+    searchDirs.push(path.join(rootDir, 'dist', 'mac-arm64'));
+  } else if (arch === 'x64') {
+    searchDirs.push(path.join(rootDir, 'dist', 'mac-x64'));
+    searchDirs.push(path.join(rootDir, 'dist', 'mac'));
+  } else if (arch === 'universal') {
+    searchDirs.push(path.join(rootDir, 'dist', 'mac-universal'));
+  }
+
+  searchDirs.push(path.join(rootDir, 'dist', 'mac-arm64'));
+  searchDirs.push(path.join(rootDir, 'dist', 'mac-x64'));
+  searchDirs.push(path.join(rootDir, 'dist', 'mac-universal'));
+  searchDirs.push(path.join(rootDir, 'dist', 'mac'));
+
+  const uniqueSearchDirs = Array.from(new Set(searchDirs));
+  for (const candidate of uniqueSearchDirs) {
+    const appBundlePath = findFirstAppBundle(candidate);
+    if (appBundlePath) return toMacBinRoot(appBundlePath);
+  }
+
+  throw new Error(
+    `No .app bundle found for mac arch=${arch}. Looked in: ${uniqueSearchDirs.join(', ')}. `
+    + 'Run the matching dist script first (e.g. npm run dist:mac:arm64 or npm run dist:mac:x64).'
+  );
+}
+
+function resolvePackagedBinRoot(platform, archArg, overrideRoot) {
   if (overrideRoot) {
     const abs = path.isAbsolute(overrideRoot) ? overrideRoot : path.join(rootDir, overrideRoot);
-    return path.resolve(abs);
+    const resolved = path.resolve(abs);
+    if (platform === 'darwin') {
+      if (resolved.endsWith('.app')) return toMacBinRoot(resolved);
+      const appBundlePath = findFirstAppBundle(resolved);
+      if (appBundlePath) return toMacBinRoot(appBundlePath);
+    }
+    return resolved;
   }
   if (platform === 'win32') {
     return path.join(rootDir, 'dist', 'win-unpacked', 'resources', 'bin');
   }
   if (platform === 'darwin') {
-    return findMacPackagedBinRoot();
+    return findMacPackagedBinRoot(archArg);
   }
   throw new Error(`Unsupported platform for packaged binary verification: ${platform}`);
 }
@@ -114,7 +181,7 @@ async function main() {
   const packagedRoot = args.root ? String(args.root) : null;
 
   const targetPairs = getTargetPairs(platform, archArg);
-  const packagedBinRoot = resolvePackagedBinRoot(platform, packagedRoot);
+  const packagedBinRoot = resolvePackagedBinRoot(platform, archArg, packagedRoot);
 
   const missing = [];
   const mismatches = [];
@@ -133,7 +200,8 @@ async function main() {
 
     for (const binary of binaries) {
       const relPath = binary.meta.relPath;
-      const expected = binary.meta.runtimeSha256 || binary.meta.sha256 || null;
+      const expectedRuntime = binary.meta.runtimeSha256 || null;
+      const expectedRepo = binary.meta.repoSha256 || binary.meta.sha256 || null;
       const absPath = path.join(packagedBinRoot, relPath);
 
       if (!existsReadable(absPath)) {
@@ -143,9 +211,21 @@ async function main() {
 
       const digest = await sha256Stream(absPath);
       const stat = fs.statSync(absPath);
-      const match = Boolean(expected && digest === expected);
+      const allowedDigests = [expectedRuntime, expectedRepo].filter(Boolean);
+      const match = allowedDigests.includes(digest);
+      let matchSource = null;
+      if (match) {
+        if (digest === expectedRuntime) matchSource = 'runtimeSha256';
+        else if (digest === expectedRepo) matchSource = 'repoSha256';
+      }
       if (!match) {
-        mismatches.push({ key: pair.key, file: absPath, expected, actual: digest });
+        mismatches.push({
+          key: pair.key,
+          file: absPath,
+          expectedRuntime,
+          expectedRepo,
+          actual: digest,
+        });
       }
 
       report.push({
@@ -153,8 +233,10 @@ async function main() {
         file: absPath,
         sizeBytes: stat.size,
         sha256: digest,
-        sha256Expected: expected,
+        sha256ExpectedRuntime: expectedRuntime,
+        sha256ExpectedRepo: expectedRepo,
         sha256Match: match,
+        sha256MatchSource: matchSource,
       });
     }
   }
@@ -173,7 +255,8 @@ async function main() {
       console.error('Packaged binary checksum mismatch:');
       mismatches.forEach((item) => {
         console.error(`- [${item.key}] ${item.file}`);
-        console.error(`  expected: ${item.expected}`);
+        if (item.expectedRuntime) console.error(`  expected(runtime): ${item.expectedRuntime}`);
+        if (item.expectedRepo) console.error(`  expected(repo):    ${item.expectedRepo}`);
         console.error(`  actual:   ${item.actual}`);
       });
     }
@@ -189,6 +272,7 @@ async function main() {
     console.log(`  key=${item.key}`);
     console.log(`  sizeBytes=${item.sizeBytes}`);
     console.log(`  sha256=${item.sha256}`);
+    if (item.sha256MatchSource) console.log(`  sha256MatchSource=${item.sha256MatchSource}`);
   });
 }
 
