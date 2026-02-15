@@ -110,6 +110,11 @@ function main() {
     'PASS contract: src/main/binaries-contract.js exists',
     'FAIL contract: missing src/main/binaries-contract.js'
   );
+  record(
+    fileExists('src/main/job-ledger.js'),
+    'PASS contract: src/main/job-ledger.js exists',
+    'FAIL contract: missing src/main/job-ledger.js'
+  );
 
   // E) path hardening helpers must exist
   const helperChecks = [
@@ -149,6 +154,21 @@ function main() {
       && has(/isDiagnosticsOnlyIntegrityMode\s*\(/, mainSource),
     'PASS main: diagnostics-only render block under bypass is present',
     'FAIL main: expected diagnostics-only render block for integrity bypass'
+  );
+  record(
+    has(/startupRecoveryPromise/, mainSource)
+      && has(/runStartupJobRecovery\s*\(/, mainSource)
+      && has(/await startupRecoveryPromise/, mainSource),
+    'PASS main: startup ledger recovery gate is present before render',
+    'FAIL main: expected startupRecoveryPromise gate before render'
+  );
+  record(
+    has(/job\.ledger\.created/, mainSource)
+      && has(/job\.ledger\.completed/, mainSource)
+      && has(/job\.recovery\.detected/, readText('src/main/job-ledger.js'))
+      && has(/job\.recovery\.cleaned/, readText('src/main/job-ledger.js')),
+    'PASS main: crash-safe ledger lifecycle/recovery logs are present',
+    'FAIL main: expected ledger lifecycle/recovery structured logs'
   );
   record(
     has(/if\s*\(\s*!app\.isPackaged\s*\)/, mainSource)

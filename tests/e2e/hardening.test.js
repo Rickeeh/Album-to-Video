@@ -236,6 +236,13 @@ function runPerfSnapshotContractTest() {
     source.includes('bin.integrity.bypassed') && source.includes('BIN_INTEGRITY_BYPASS'),
     'Perf snapshot: expected explicit integrity bypass logging + diagnostics-only render block.'
   );
+  assertOk(
+    source.includes('createJobLedger(')
+      && source.includes('completeJobLedger(')
+      && source.includes('runStartupJobRecovery()')
+      && source.includes('startupRecoveryPromise'),
+    'Perf snapshot: expected crash-safe job ledger lifecycle + startup recovery wiring.'
+  );
   console.log('OK: perf snapshot contract present in render report + diagnostics export');
 }
 

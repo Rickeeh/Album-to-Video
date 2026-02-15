@@ -74,6 +74,13 @@ function assertOk(condition, message) {
       rootsScanned: 2,
       examples: [],
     },
+    startupJobRecovery: {
+      scannedLedgers: 1,
+      inProgressDetected: 1,
+      cleanedLedgers: 1,
+      deletedTmpCount: 2,
+      blockedOutsideBaseCount: 1,
+    },
     finalizeSummary: {
       renameMs: 10,
       reportMs: 5,
@@ -134,6 +141,11 @@ function assertOk(condition, message) {
   assertOk(
     diagnostics.observability.startupPartialScan && diagnostics.observability.startupPartialScan.foundCount === 0,
     'Diagnostics test: expected startupPartialScan in observability.'
+  );
+  assertOk(
+    diagnostics.observability.startupJobRecovery
+      && diagnostics.observability.startupJobRecovery.cleanedLedgers === 1,
+    'Diagnostics test: expected startupJobRecovery in observability.'
   );
   assertOk(
     diagnostics.observability.finalizeSummary && diagnostics.observability.finalizeSummary.totalMs === 17,

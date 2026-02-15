@@ -152,6 +152,7 @@ async function exportDiagnosticsBundle({
   pinnedWinBinaryHashes = null,
   maxLogEvents = MAX_LOG_EVENTS,
   startupPartialScan = null,
+  startupJobRecovery = null,
   finalizeSummary = null,
   progressStatusTail = null,
 }) {
@@ -176,6 +177,7 @@ async function exportDiagnosticsBundle({
     },
     observability: {
       startupPartialScan: startupPartialScan || startupFromLogs || null,
+      startupJobRecovery: startupJobRecovery || null,
       finalizeSummary: finalizeSummary || finalizeFromLogs || null,
     },
     render: readRenderReport(renderReportPath),

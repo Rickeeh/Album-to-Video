@@ -10,6 +10,13 @@ const { createSessionLogger } = require('./src/main/logger');
 const { exportDiagnosticsBundle, MAX_LOG_EVENTS, redactSensitivePathSegments } = require('./src/main/diagnostics');
 const { createEngineFsm } = require('./src/main/engine-fsm');
 const {
+  getJobLedgerDir,
+  createJobLedger,
+  completeJobLedger,
+  deleteJobLedger,
+  recoverInProgressLedgers,
+} = require('./src/main/job-ledger');
+const {
   BINARY_CONTRACT_VERSION,
   getBinaryContractKey,
   getBinaryContractTarget,
@@ -29,6 +36,8 @@ const RENDER_SIGNAL_TAIL_MAX = 200;
 const renderSignalTail = [];
 let latestStartupPartialScan = null;
 let latestFinalizeSummary = null;
+let latestJobRecoverySummary = null;
+let startupRecoveryPromise = Promise.resolve();
 
 if (process.platform === 'win32') {
   try {
@@ -1364,6 +1373,36 @@ function logStartupPartialArtifacts() {
   sessionLogger?.info?.('startup.partial_scan', scanPayload);
 }
 
+function runStartupJobRecovery() {
+  try {
+    const appLogDir = getAppLogDir();
+    const ledgerDir = getJobLedgerDir(appLogDir);
+    const summary = recoverInProgressLedgers({
+      ledgerDir,
+      logger: sessionLogger,
+      safeRmdirIfEmpty,
+      redactPath: redactPathForLog,
+      maxLedgers: 200,
+    });
+    latestJobRecoverySummary = summary;
+    return summary;
+  } catch (err) {
+    const summary = {
+      scannedLedgers: 0,
+      inProgressDetected: 0,
+      cleanedLedgers: 0,
+      invalidLedgers: 0,
+      deletedTmpCount: 0,
+      blockedOutsideBaseCount: 0,
+      failed: true,
+      message: String(err?.message || err),
+    };
+    latestJobRecoverySummary = summary;
+    sessionLogger?.warn?.('job.recovery.cleanup_failed', summary);
+    return summary;
+  }
+}
+
 function movePartialToFinalOutput(partialPath, outputFinalPath) {
   try {
     fs.renameSync(partialPath, outputFinalPath);
@@ -1612,6 +1651,8 @@ app.whenReady().then(() => {
         arch: process.arch,
       });
       seedSelectedExportFolderFromEnv();
+      startupRecoveryPromise = Promise.resolve().then(() => runStartupJobRecovery());
+      await startupRecoveryPromise;
       resolveBundledBinaries();
       try {
         const integrity = await ensureBinaryIntegrityContract({ strictPackaged: app.isPackaged });
@@ -1823,6 +1864,7 @@ registerIpcHandler('cancel-render', async () => {
 });
 
 registerIpcHandler('export-diagnostics', async (_event, payload) => {
+  await startupRecoveryPromise;
   const requestedExportFolder = String(payload?.exportFolder || '').trim();
   let destinationDir;
   let renderReportPath = null;
@@ -1867,6 +1909,7 @@ registerIpcHandler('export-diagnostics', async (_event, payload) => {
     pinnedWinBinaryHashes: getPinnedWinBinaryHashes(),
     maxLogEvents: MAX_LOG_EVENTS,
     startupPartialScan: latestStartupPartialScan,
+    startupJobRecovery: latestJobRecoverySummary,
     finalizeSummary: latestFinalizeSummary,
     progressStatusTail: getRenderSignalsTail(MAX_LOG_EVENTS),
   });
@@ -2355,6 +2398,7 @@ function runFfmpegStillImage({
 }
 
 registerIpcHandler('render-album', async (event, payload) => {
+  await startupRecoveryPromise;
   const payloadObj = (payload && typeof payload === 'object' && !Array.isArray(payload)) ? payload : {};
   sessionLogger?.info?.('ipc.render_album.received', {
     hasPayload: Boolean(payload),
@@ -2372,6 +2416,25 @@ registerIpcHandler('render-album', async (event, payload) => {
   const jobId = plan.jobId;
   const exportFolder = plan.exportFolder;
   const selectedExportFolder = resolveExistingDirectoryPath(lastSelectedExportFolder, 'Selected export folder');
+  const appLogDir = getAppLogDir();
+  const jobLedgerDir = getJobLedgerDir(appLogDir);
+  const plannedTmpPaths = plan.tracks.map((t) => t.partialPath);
+  const plannedFinalPaths = plan.tracks.map((t) => t.outputFinalPath);
+  const { ledgerPath } = createJobLedger({
+    ledgerDir: jobLedgerDir,
+    jobId,
+    exportFolder,
+    tmpPaths: plannedTmpPaths,
+    outputFinalPaths: plannedFinalPaths,
+    logPath: sessionLogger?.filePath || null,
+  });
+  sessionLogger?.info?.('job.ledger.created', {
+    jobId,
+    ledgerPath: redactPathForLog(ledgerPath),
+    exportFolder: redactPathForLog(exportFolder),
+    tmpCount: plannedTmpPaths.length,
+    outputCount: plannedFinalPaths.length,
+  });
   const engineFsm = createEngineFsm({
     jobId,
     onTransition: (entry) => sessionLogger?.info?.('engine.state', entry),
@@ -2474,6 +2537,7 @@ registerIpcHandler('render-album', async (event, payload) => {
     tracks: [],
     logs: {
       sessionLogPath: sessionLogger?.filePath || null,
+      jobLedgerPath: ledgerPath || null,
     },
     job: {
       id: jobId,
@@ -2584,6 +2648,41 @@ registerIpcHandler('render-album', async (event, payload) => {
     report.perf.engineFinalState = finalState;
     perfLocked = true;
     return finalState;
+  };
+  const completeAndDeleteLedger = (status, reasonCode = null) => {
+    if (!ledgerPath) return;
+    try {
+      completeJobLedger({
+        ledgerPath,
+        status,
+        cleanupComplete: true,
+        reasonCode: reasonCode || null,
+      });
+      sessionLogger?.info?.('job.ledger.completed', {
+        jobId,
+        ledgerPath: redactPathForLog(ledgerPath),
+        status,
+        cleanupComplete: true,
+        reasonCode: reasonCode || null,
+      });
+    } catch (err) {
+      sessionLogger?.warn?.('job.ledger.complete_failed', {
+        jobId,
+        ledgerPath: redactPathForLog(ledgerPath),
+        status,
+        reasonCode: reasonCode || null,
+        message: String(err?.message || err),
+      });
+    }
+    try {
+      deleteJobLedger(ledgerPath);
+    } catch (err) {
+      sessionLogger?.warn?.('job.ledger.delete_failed', {
+        jobId,
+        ledgerPath: redactPathForLog(ledgerPath),
+        message: String(err?.message || err),
+      });
+    }
   };
 
   try {
@@ -2983,6 +3082,7 @@ registerIpcHandler('render-album', async (event, payload) => {
     sendRenderStatus(event.sender, { phase: 'success' });
 
     if (debugLogger?.path) currentJob.cleanupContext.stagingPaths.delete(debugLogger.path);
+    completeAndDeleteLedger('DONE', null);
     return {
       ok: true,
       exportFolder,
@@ -3020,6 +3120,8 @@ registerIpcHandler('render-album', async (event, payload) => {
       cleanupDeletedFinalCount: Number(cleanupStats?.cleanupDeletedFinalCount || 0),
       cleanupRemovedEmptyFolder: Boolean(cleanupStats?.cleanupRemovedEmptyFolder),
     };
+    const ledgerStatus = reasonCode === REASON_CODES.CANCELLED ? 'CANCELLED' : 'FAILED';
+    completeAndDeleteLedger(ledgerStatus, reasonCode);
     sessionLogger?.error('render.failed', {
       jobId,
       reasonCode,
