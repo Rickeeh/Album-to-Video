@@ -29,11 +29,14 @@
     "perf:compare": "node scripts/perf-compare.js --strict-runtime",
     "verify:perf": "npm run perf:run && npm run perf:compare",
     "package:manifest": "node scripts/package-manifest.js",
-    "verify:package": "node scripts/package-manifest.js --soft"
+    "verify:package": "node scripts/package-manifest.js --soft",
+    "build:icons": "node scripts/build-icons.js"
   },
   "devDependencies": {
     "electron": "^40.0.0",
-    "electron-builder": "^26.7.0"
+    "electron-builder": "^26.7.0",
+    "png2icons": "^2.0.1",
+    "sharp": "^0.34.5"
   },
   "dependencies": {
     "@ffprobe-installer/ffprobe": "^2.1.2",
@@ -42,7 +45,7 @@
   },
   "build": {
     "appId": "com.cudellmediasystems.frender",
-    "productName": "fRender",
+    "productName": "fRender – Album to Video",
     "asar": true,
     "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
     "afterPack": "scripts/electron-builder-after-pack.js",
@@ -68,10 +71,11 @@
       "!node_modules/@ffmpeg-installer/**"
     ],
     "mac": {
+      "icon": "build-resources/icon.icns",
       "category": "public.app-category.music",
       "extendInfo": {
-        "CFBundleName": "fRender",
-        "CFBundleDisplayName": "fRender"
+        "CFBundleName": "fRender – Album to Video",
+        "CFBundleDisplayName": "fRender – Album to Video"
       },
       "hardenedRuntime": true,
       "gatekeeperAssess": false,
@@ -124,7 +128,16 @@
         }
       ]
     },
+    "dmg": {
+      "background": "build-resources/dmg-background.png",
+      "iconSize": 120,
+      "window": {
+        "width": 600,
+        "height": 400
+      }
+    },
     "win": {
+      "icon": "build-resources/icon.ico",
       "legalTrademarks": "Cudell Media Systems",
       "extraResources": [
         {
