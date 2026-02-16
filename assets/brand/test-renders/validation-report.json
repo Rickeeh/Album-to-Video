@@ -1,0 +1,121 @@
+{
+  "generatedAtUtc": "2026-02-16T14:31:07.978Z",
+  "sizes": [
+    16,
+    32,
+    64,
+    128,
+    256,
+    512
+  ],
+  "contexts": [
+    {
+      "key": "macos-dock-light",
+      "bg": "#ffffff"
+    },
+    {
+      "key": "macos-dock-dark",
+      "bg": "#1e1e1e"
+    },
+    {
+      "key": "windows-taskbar",
+      "bg": "#0c0f14"
+    }
+  ],
+  "headerHeights": [
+    24,
+    32
+  ],
+  "sources": {
+    "mark": {
+      "sizes": {
+        "16": {
+          "width": 16,
+          "height": 16,
+          "segmentCount": 4,
+          "minGapPx": 1,
+          "topCenterAlpha": 221,
+          "antiAliasRatio": 1,
+          "softEdgeMaxRunPx": 8,
+          "passes": {
+            "barsSeparatedAt16": true,
+            "baseShapeVisible": true,
+            "antiAliasingReasonable": true
+          }
+        }
+      },
+      "contexts": [
+        {
+          "context": "macos-dock-light",
+          "file": "mark-macos-dock-light.png",
+          "background": "#ffffff"
+        },
+        {
+          "context": "macos-dock-dark",
+          "file": "mark-macos-dock-dark.png",
+          "background": "#1e1e1e"
+        },
+        {
+          "context": "windows-taskbar",
+          "file": "mark-windows-taskbar.png",
+          "background": "#0c0f14"
+        }
+      ],
+      "header": [
+        {
+          "height": 24,
+          "file": "mark-header-24.png"
+        },
+        {
+          "height": 32,
+          "file": "mark-header-32.png"
+        }
+      ]
+    },
+    "mono": {
+      "sizes": {
+        "16": {
+          "width": 16,
+          "height": 16,
+          "segmentCount": 4,
+          "minGapPx": 1,
+          "topCenterAlpha": 221,
+          "antiAliasRatio": 1,
+          "softEdgeMaxRunPx": 8,
+          "passes": {
+            "barsSeparatedAt16": true,
+            "baseShapeVisible": true,
+            "antiAliasingReasonable": true
+          }
+        }
+      },
+      "contexts": [
+        {
+          "context": "macos-dock-light",
+          "file": "mono-macos-dock-light.png",
+          "background": "#ffffff"
+        },
+        {
+          "context": "macos-dock-dark",
+          "file": "mono-macos-dock-dark.png",
+          "background": "#1e1e1e"
+        },
+        {
+          "context": "windows-taskbar",
+          "file": "mono-windows-taskbar.png",
+          "background": "#0c0f14"
+        }
+      ],
+      "header": [
+        {
+          "height": 24,
+          "file": "mono-header-24.png"
+        },
+        {
+          "height": 32,
+          "file": "mono-header-32.png"
+        }
+      ]
+    }
+  }
+}
