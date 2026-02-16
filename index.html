@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<title>fRender</title>
+<title>fRender – Album to Video</title>
 <style>
   :root{
     --bg:#0c0f14;
@@ -22,6 +22,8 @@
     --azDividerGap:18px;
     --bottomInset:20px;
     --subSectionGap:clamp(12px, 1.8vh, 18px);
+    --kvToActionGap:18px;
+    --settingsFooterPad:14px;
   }
   *{ box-sizing:border-box; }
   html, body{
@@ -37,9 +39,9 @@
     overflow:hidden;
   }
   .topbar{ display:flex; align-items:flex-start; justify-content:space-between; gap:13px; margin-bottom:var(--topbarGap); }
-  .title{ font-size:20px; font-weight:900; letter-spacing:0.2px; }
+  .brandTag{ font-size:11px; color:var(--muted); font-weight:850; letter-spacing:0.2px; }
+  .title{ font-size:20px; font-weight:900; letter-spacing:0.2px; margin-top:3px; }
   .subtitle{ font-size:13px; color:var(--muted); margin-top:6px; max-width:860px; line-height:1.35; }
-  .subtitle .byline{ display:block; margin-top:2px; font-size:11px; letter-spacing:0.2px; opacity:0.92; }
   .topActions{ display:flex; gap:13px; align-items:center; flex-wrap:wrap; }
   .grid{
     display:grid;
@@ -331,22 +333,27 @@
   .toast.info{ border-color: rgba(90,167,255,0.35); color: var(--accentSoft); }
 
   /* --- Settings panel optical balance (UI-only, fixed-window safe) --- */
+  .settingsCard{ padding:24px 24px var(--settingsFooterPad); }
   .settingsCard .row{ margin-top:10px; }
   .settingsCard .row.first{ margin-top:0; }
   .settingsCard .subSection{ margin-top:var(--subSectionGap); }
   .settingsCard .inline{ margin-top:10px; gap:12px; }
-  .settingsCard .kv{ margin-top:calc(var(--subSectionGap) - 2px); }
-  .settingsCard .actionRow{ margin-top:calc(var(--bottomInset) - 8px); }
+  .settingsCard .kv{
+    margin-top:calc(var(--subSectionGap) - 2px);
+    margin-bottom:var(--kvToActionGap);
+  }
+  .settingsCard .actionRow{ margin-top:0; }
   .settingsCard select{ width:min(240px, 100%); }
   .settingsCard #releaseFolderSection{ min-width:0; }
   .settingsCard #albumName{ width:210px; }
+  .settingsCard .actionZone{ margin-top:0; }
   .settingsCard .actionZone{ padding-bottom:0; }
   .settingsCard .progressWrap{
     border-top:1px solid rgba(255,255,255,0.08);
     padding-top:12px;
     padding-bottom:0;
   }
-  .settingsCard .actionZone .progressWrap{ margin-top:calc(var(--azDividerGap) - var(--azGap) + 4px); }
+  .settingsCard .actionZone .progressWrap{ margin-top:0; }
   .settingsCard .statusLine{ margin:0 0 6px 0; }
 
   .actionZone{
@@ -355,7 +362,7 @@
     flex-direction:column;
     gap:var(--azGap);
   }
-  .actionZone .progressWrap{ margin-top:calc(var(--azDividerGap) - var(--azGap)); }
+  .actionZone .progressWrap{ margin-top:0; }
 
 </style>
 </head>
@@ -364,8 +371,9 @@
 <div class="appShell">
 <div class="topbar">
   <div>
-    <div class="title">fRender</div>
-    <div class="subtitle">Turn cover art and audio files into clean MP4 exports.<span class="byline">by Cudell Media Systems</span></div>
+    <div class="brandTag">fRender</div>
+    <div class="title">Album to Video</div>
+    <div class="subtitle">Convert audio to clean MP4 exports. One image. No surprises.</div>
   </div>
   <div class="topActions">
     <button class="secondary" id="btnNewAlbum">New</button>
