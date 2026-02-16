@@ -59,7 +59,7 @@ function assertOk(condition, message) {
       appVersion: '1.0.0',
       platform: process.platform,
       arch: process.arch,
-      execPath: '/Users/alice/Applications/Album to Video.app',
+      execPath: '/Users/alice/Applications/fRender.app',
       resourcesPath: 'C:\\Users\\Alice\\AppData\\Roaming\\Album-to-Video\\resources',
     },
     engineInfo: {
@@ -111,7 +111,7 @@ function assertOk(condition, message) {
       appVersion: '1.0.0',
       platform: process.platform,
       arch: process.arch,
-      execPath: '/Users/alice/Applications/Album to Video.app',
+      execPath: '/Users/alice/Applications/fRender.app',
       resourcesPath: 'C:\\Users\\Alice\\AppData\\Roaming\\Album-to-Video\\resources',
     },
     engineInfo: {

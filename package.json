@@ -45,7 +45,7 @@
   },
   "build": {
     "appId": "com.cudellmediasystems.frender",
-    "productName": "fRender – Album to Video",
+    "productName": "fRender",
     "asar": true,
     "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
     "afterPack": "scripts/electron-builder-after-pack.js",
@@ -74,8 +74,8 @@
       "icon": "build-resources/icon.icns",
       "category": "public.app-category.music",
       "extendInfo": {
-        "CFBundleName": "fRender – Album to Video",
-        "CFBundleDisplayName": "fRender – Album to Video"
+        "CFBundleName": "fRender",
+        "CFBundleDisplayName": "fRender"
       },
       "hardenedRuntime": true,
       "gatekeeperAssess": false,
@@ -131,9 +131,21 @@
     "dmg": {
       "background": "build-resources/dmg-background.png",
       "iconSize": 120,
+      "contents": [
+        {
+          "x": 170,
+          "y": 235
+        },
+        {
+          "x": 510,
+          "y": 235,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ],
       "window": {
-        "width": 600,
-        "height": 400
+        "width": 720,
+        "height": 450
       }
     },
     "win": {

@@ -1117,8 +1117,10 @@
   function uiLog(event, payload = {}, level = 'info') {
     const data = (payload && typeof payload === 'object' && !Array.isArray(payload)) ? payload : {};
     const entry = { event, level, ...data };
-    const fn = level === 'error' ? console.error : (level === 'warn' ? console.warn : console.log);
-    fn('[ui]', entry);
+    const verboseUiConsole = window.localStorage?.getItem('frender:ui-console') === '1';
+    if (level === 'error') console.error('[ui]', entry);
+    else if (level === 'warn') console.warn('[ui]', entry);
+    else if (verboseUiConsole) console.log('[ui]', entry);
     try {
       window.api?.logUiEvent?.(entry);
     } catch {}
