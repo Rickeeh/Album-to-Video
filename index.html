@@ -22,8 +22,9 @@
     --azDividerGap:18px;
     --bottomInset:20px;
     --subSectionGap:clamp(12px, 1.8vh, 18px);
-    --settingsSectionGap:4px;
-    --kvToActionGap:18px;
+    --settingsSectionGap:8px;
+    --settingsReleaseGap:12px;
+    --kvToActionGap:12px;
     --settingsFooterPad:14px;
   }
   *{ box-sizing:border-box; }
@@ -139,8 +140,7 @@
     margin-top:var(--azTop);
   }
   .actionRow #btnOpenFolder{ margin-left:auto; }
-  #btnAddTracks,
-  #renderBtn{
+  #btnAddTracks{
     min-width:128px;
     min-height:42px;
   }
@@ -168,8 +168,10 @@
   .settingsCard .actionRow #renderBtn{
     background: var(--accent);
     color:#04111e;
+    min-width:128px;
+    min-height:40px;
     border-radius:11px;
-    padding:11px 15px;
+    padding:10px 16px;
     font-weight:850;
     font-size:13px;
     letter-spacing:0;
@@ -399,6 +401,8 @@
   /* --- Settings panel optical balance (UI-only, fixed-window safe) --- */
   .settingsCard{
     padding:24px 24px var(--settingsFooterPad);
+    display:flex;
+    flex-direction:column;
     min-height:0;
     overflow:hidden;
   }
@@ -412,6 +416,8 @@
   }
   .settingsCard .settingsGroup.first{ margin-top:0; }
   .settingsCard .settingsGroup + .settingsGroup{ margin-top:var(--settingsSectionGap); }
+  .settingsCard .settingsGroup.first + .settingsGroup{ margin-top:var(--settingsReleaseGap); }
+  .settingsCard .settingsGroup.releaseGroup + .settingsGroup{ margin-top:var(--settingsReleaseGap); }
   .settingsCard .settingsGroup .inline{ margin-top:0; }
   .settingsCard .releaseRow{
     width:min(520px, 100%);
@@ -428,13 +434,31 @@
     margin-bottom:var(--kvToActionGap);
   }
   .settingsCard .settingsGroup .kv{ margin-top:0; }
-  .settingsCard .actionRow{ margin-top:0; }
+  .settingsCard .actionRow{ margin-top:6px; }
+  .settingsCard .actionRow > button{
+    min-height:40px;
+    padding:10px 16px;
+  }
   .settingsCard select{ width:min(240px, 100%); }
   .settingsCard #releaseFolderSection{ min-width:0; }
   .settingsCard #albumName{ width:210px; }
   .settingsCard .actionZone{
     margin-top:0;
+    gap:12px;
   }
+  .settingsCard .footerGroup{
+    display:flex;
+    flex-direction:column;
+    flex:1 1 auto;
+    min-height:0;
+  }
+  .settingsCard .footerGroup .actionZone{
+    display:flex;
+    flex-direction:column;
+    flex:1 1 auto;
+    min-height:0;
+  }
+  .settingsCard .footerGroup .progressWrap{ margin-top:auto; }
   .settingsCard .actionZone{ padding-bottom:0; }
   .settingsCard .progressWrap{
     border-top:1px solid rgba(255,255,255,0.08);
@@ -514,7 +538,7 @@
       </div>
     </div>
 
-    <div class="settingsGroup">
+    <div class="settingsGroup releaseGroup">
       <div class="inline releaseRow">
         <label><input type="checkbox" id="createAlbumFolder" checked /> Create release folder</label>
         <div id="releaseFolderSection">
@@ -523,7 +547,7 @@
       </div>
     </div>
 
-    <div class="settingsGroup">
+    <div class="settingsGroup footerGroup">
       <div class="row first">
         <button class="secondary" id="btnCover">Choose cover art</button>
         <button class="secondary" id="btnExport">Choose export folder</button>
