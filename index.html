@@ -387,16 +387,19 @@
   .settingsCard{
     padding:24px 24px var(--settingsFooterPad);
     min-height:0;
+    overflow:hidden;
+  }
+  .settingsCard.needsScroll{
     overflow-y:auto;
     scrollbar-width:thin;
     scrollbar-color: rgba(143,198,255,0.22) rgba(255,255,255,0.04);
   }
-  .settingsCard::-webkit-scrollbar{ width:8px; }
-  .settingsCard::-webkit-scrollbar-track{
+  .settingsCard.needsScroll::-webkit-scrollbar{ width:8px; }
+  .settingsCard.needsScroll::-webkit-scrollbar-track{
     background: rgba(255,255,255,0.04);
     border-radius:999px;
   }
-  .settingsCard::-webkit-scrollbar-thumb{
+  .settingsCard.needsScroll::-webkit-scrollbar-thumb{
     background: rgba(143,198,255,0.22);
     border-radius:999px;
     border:2px solid rgba(0,0,0,0);
@@ -646,6 +649,7 @@
   const coverImg = document.getElementById('coverImg');
   const coverPlaceholder = document.getElementById('coverPlaceholder');
   const coverPreviewText = document.getElementById('coverPreviewText');
+  const settingsCard = document.querySelector('.settingsCard');
 
   const toastWrap = document.getElementById('toastWrap');
   const logsRow = document.getElementById('logsRow');
@@ -684,6 +688,7 @@
   let lastProgressSignal = 'none';
   let disposeProgress = null;
   let disposeStatus = null;
+  let settingsScrollRaf = null;
 
   const uiDisableList = [
     btnAddTracks,
@@ -703,6 +708,22 @@
     renderBtn.disabled = !!locked;
     document.body.classList.toggle('locked', !!locked);
     updateReleaseFolderState();
+    queueSettingsScrollMode();
+  }
+
+  function updateSettingsScrollMode() {
+    if (!settingsCard) return;
+    const overflowDelta = settingsCard.scrollHeight - settingsCard.clientHeight;
+    settingsCard.classList.toggle('needsScroll', overflowDelta > 1);
+  }
+
+  function queueSettingsScrollMode() {
+    if (!settingsCard) return;
+    if (settingsScrollRaf) return;
+    settingsScrollRaf = requestAnimationFrame(() => {
+      settingsScrollRaf = null;
+      updateSettingsScrollMode();
+    });
   }
 
   function clearStatusResetTimer() {
@@ -797,6 +818,7 @@
     const enabled = !!createAlbumFolderEl.checked;
     albumNameEl.disabled = isRendering || !enabled;
     releaseFolderSection.classList.toggle('dimmed', !enabled);
+    queueSettingsScrollMode();
   }
 
   function sanitizeFolderName(name) {
@@ -914,13 +936,17 @@
     });
   }
 
-  function showProgressUI() { progressWrap.style.display = 'block'; }
+  function showProgressUI() {
+    progressWrap.style.display = 'block';
+    queueSettingsScrollMode();
+  }
   function hideProgressUI({ preserveStatus = false } = {}) {
     resetOverallProgress();
     trackTitle.textContent = 'Track —';
     if (!preserveStatus) setStatus('Ready');
     btnOpenFolder.classList.add('isHidden');
     logsRow.classList.add('hidden');
+    queueSettingsScrollMode();
   }
 
   function selectedPresetPolicy() {
@@ -942,6 +968,7 @@
   function updatePresetDescription() {
     const selected = presetCatalog.find((p) => p.key === presetSelect.value);
     presetDescription.textContent = describePreset(selected);
+    queueSettingsScrollMode();
   }
 
   function shouldAutoSortByTrackNo() {
@@ -1024,6 +1051,7 @@
     });
 
     updateCounts();
+    queueSettingsScrollMode();
   }
 
   function clearTracksOnly() {
@@ -1040,6 +1068,7 @@
     coverImg.style.display = 'none';
     coverPlaceholder.style.display = 'block';
     coverPreviewText.textContent = 'No cover art';
+    queueSettingsScrollMode();
   }
 
   function clearExportFolder() {
@@ -1209,6 +1238,7 @@
     coverImg.src = filePathToUrl(file);
     coverImg.style.display = 'block';
     coverPlaceholder.style.display = 'none';
+    queueSettingsScrollMode();
   }
 
   async function chooseFolder() {
@@ -1216,6 +1246,7 @@
     if (!folder) return;
     exportFolder = folder;
     exportLabel.textContent = folder;
+    queueSettingsScrollMode();
   }
 
   async function openOutputFolder() {
@@ -1494,6 +1525,9 @@
     sortTracksIfSafe();
     scheduleRenderTrackList();
   });
+  window.addEventListener('resize', queueSettingsScrollMode);
+  window.visualViewport?.addEventListener('resize', queueSettingsScrollMode);
+  coverImg.addEventListener('load', queueSettingsScrollMode);
 
   renderTrackList();
   clearCover();
@@ -1501,6 +1535,7 @@
   hideProgressUI();
   ensureRenderListeners();
   loadPresets();
+  queueSettingsScrollMode();
 </script>
 
 </body>
