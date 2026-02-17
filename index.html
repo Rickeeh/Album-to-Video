@@ -417,10 +417,6 @@
     min-width:0;
   }
   .settingsCard .settingsGroup.first{ margin-top:0; }
-  .settingsCard .settingsGroup.first + .divider{
-    margin-top:var(--settingsUnit);
-    margin-bottom:var(--settingsUnit);
-  }
   .settingsCard .divider{
     height:1px;
     margin:var(--settingsUnit) 0;
@@ -428,7 +424,7 @@
   }
   .settingsCard .settingsGroup .inline{ margin-top:0; }
   .settingsCard .kv{
-    margin-top:var(--settingsTightGap);
+    margin-top:calc(var(--subSectionGap) - 2px);
     margin-bottom:var(--kvToActionGap);
   }
   .settingsCard .settingsGroup .kv{ margin-top:0; }
@@ -446,7 +442,6 @@
   }
   .settingsCard .actionZone{
     margin-top:0;
-    gap:var(--settingsTightGap);
   }
   .settingsCard .actionZone{ padding-bottom:0; }
   .settingsCard .progressWrap{
@@ -526,8 +521,6 @@
         </label>
       </div>
     </div>
-
-    <div class="divider"></div>
 
     <div class="settingsGroup">
       <div class="inline">
