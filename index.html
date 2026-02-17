@@ -45,7 +45,7 @@
   .topActions{ display:flex; gap:13px; align-items:center; flex-wrap:wrap; }
   .grid{
     display:grid;
-    grid-template-columns: minmax(420px, 1fr) minmax(420px, 1fr);
+    grid-template-columns: minmax(520px, 1.2fr) minmax(420px, 0.95fr);
     gap:24px;
     flex:1 1 auto;
     min-width:0;
@@ -97,9 +97,9 @@
     background: var(--accent);
     color:#04111e;
     border:0;
-    border-radius:10px;
-    padding:10px 12px;
-    font-weight:900;
+    border-radius:11px;
+    padding:11px 15px;
+    font-weight:850;
     cursor:pointer;
     font-size:13px;
   }
@@ -108,7 +108,7 @@
   button.primary{
     background: linear-gradient(180deg, var(--accentSoft), var(--accent));
     color:#02101e;
-    padding:12px 16px;
+    padding:13px 18px;
     border-radius:12px;
     font-size:14px;
     letter-spacing:0.2px;
@@ -345,10 +345,21 @@
   .settingsCard .row.first{ margin-top:0; }
   .settingsCard .subSection{ margin-top:var(--subSectionGap); }
   .settingsCard .inline{ margin-top:10px; gap:12px; }
+  .settingsCard .settingsGroup{
+    margin-top:var(--subSectionGap);
+    min-width:0;
+  }
+  .settingsCard .settingsGroup.first{ margin-top:0; }
+  .settingsCard .divider{
+    height:1px;
+    margin:var(--azDividerGap) 0;
+    background:var(--border);
+  }
   .settingsCard .kv{
     margin-top:calc(var(--subSectionGap) - 2px);
     margin-bottom:var(--kvToActionGap);
   }
+  .settingsCard .settingsGroup .kv{ margin-top:0; }
   .settingsCard .actionRow{ margin-top:0; }
   .settingsCard select{ width:min(240px, 100%); }
   .settingsCard #releaseFolderSection{ min-width:0; }
@@ -402,59 +413,75 @@
   <div class="card settingsCard">
     <h3>Settings</h3>
 
-    <div class="row first">
-      <label class="presetBlock" style="display:flex; flex-direction:column; gap:6px;">
-        <span style="color:var(--muted); font-weight:850; font-size:12px;">Preset</span>
-        <select id="presetSelect"></select>
-        <span id="presetDescription"></span>
-      </label>
-    </div>
-
-    <div class="inline">
-      <label><input type="checkbox" id="createAlbumFolder" checked /> Create release folder</label>
-      <div id="releaseFolderSection">
-        <input type="text" id="albumName" placeholder="Release name" />
+    <div class="settingsGroup first">
+      <div class="row first">
+        <label class="presetBlock" style="display:flex; flex-direction:column; gap:6px;">
+          <span style="color:var(--muted); font-weight:850; font-size:12px;">Preset</span>
+          <select id="presetSelect"></select>
+          <span id="presetDescription"></span>
+        </label>
       </div>
     </div>
 
-    <div class="row subSection">
-      <button class="secondary" id="btnCover">Choose cover art</button>
-      <button class="secondary" id="btnExport">Choose export folder</button>
-    </div>
+    <div class="divider"></div>
 
-    <div class="coverPreviewRow subSection">
-      <div class="coverPreview">
-        <img id="coverImg" alt="Cover art" />
-        <div class="coverPlaceholder" id="coverPlaceholder">No cover art</div>
-      </div>
-      <div class="coverMeta">
-        <div class="coverMetaBox">
-          <div class="coverMetaTitle">Cover art</div>
-          <div class="coverMetaSub" id="coverPreviewText">No cover art</div>
+    <div class="settingsGroup">
+      <div class="inline">
+        <label><input type="checkbox" id="createAlbumFolder" checked /> Create release folder</label>
+        <div id="releaseFolderSection">
+          <input type="text" id="albumName" placeholder="Release name" />
         </div>
       </div>
     </div>
 
-    <div class="kv">
-      <div>Cover art:</div><div class="v" id="coverLabel">Not selected</div>
-      <div>Export:</div><div class="v" id="exportLabel">Not selected</div>
-      <div>Tracks:</div><div class="v" id="countLabel">0</div>
+    <div class="divider"></div>
+
+    <div class="settingsGroup">
+      <div class="row first">
+        <button class="secondary" id="btnCover">Choose cover art</button>
+        <button class="secondary" id="btnExport">Choose export folder</button>
+      </div>
+
+      <div class="coverPreviewRow">
+        <div class="coverPreview">
+          <img id="coverImg" alt="Cover art" />
+          <div class="coverPlaceholder" id="coverPlaceholder">No cover art</div>
+        </div>
+        <div class="coverMeta">
+          <div class="coverMetaBox">
+            <div class="coverMetaTitle">Cover art</div>
+            <div class="coverMetaSub" id="coverPreviewText">No cover art</div>
+          </div>
+        </div>
+      </div>
     </div>
 
-    <div class="actionZone">
+    <div class="divider"></div>
 
-    <div class="row actionRow">
-      <button id="renderBtn" class="primary">Export</button>
-      <button id="cancelBtn" class="danger" disabled>Cancel</button>
-      <button class="secondary isHidden" id="btnOpenFolder">Output folder</button>
-    </div>
+    <div class="settingsGroup">
+      <div class="kv">
+        <div>Cover art:</div><div class="v" id="coverLabel">Not selected</div>
+        <div>Export:</div><div class="v" id="exportLabel">Not selected</div>
+        <div>Tracks:</div><div class="v" id="countLabel">0</div>
+      </div>
 
-    <div class="progressWrap" id="progressWrap">
-      <div class="statusLine" id="statusLine">Ready</div>
-      <div class="progressTitle" id="trackTitle">Track —</div>
-      <div class="bar"><div class="fill total" id="totalFill"></div><div class="barText" id="overallPercent">0%</div></div>
-      <div class="openRow hidden" id="logsRow">
-        <button class="secondary" id="btnOpenLogs">Ver logs</button>
+      <div class="actionZone">
+
+      <div class="row actionRow">
+        <button id="renderBtn" class="primary">Export</button>
+        <button id="cancelBtn" class="danger" disabled>Cancel</button>
+        <button class="secondary isHidden" id="btnOpenFolder">Output folder</button>
+      </div>
+
+      <div class="progressWrap" id="progressWrap">
+        <div class="statusLine" id="statusLine">Ready</div>
+        <div class="progressTitle" id="trackTitle">Track —</div>
+        <div class="bar"><div class="fill total" id="totalFill"></div><div class="barText" id="overallPercent">0%</div></div>
+        <div class="openRow hidden" id="logsRow">
+          <button class="secondary" id="btnOpenLogs">Ver logs</button>
+        </div>
+      </div>
+
       </div>
     </div>
 
