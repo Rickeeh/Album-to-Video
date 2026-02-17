@@ -133,11 +133,11 @@
       "iconSize": 120,
       "contents": [
         {
-          "x": 170,
+          "x": 165,
           "y": 235
         },
         {
-          "x": 510,
+          "x": 445,
           "y": 235,
           "type": "link",
           "path": "/Applications"
