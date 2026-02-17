@@ -63,6 +63,7 @@ function listLedgerFiles(ledgerDir) {
   if (!ledgerDir || !fs.existsSync(ledgerDir)) return [];
   try {
     return fs.readdirSync(ledgerDir)
+      .sort((a, b) => String(a).localeCompare(String(b)))
       .filter((name) => /^job-ledger-.*\.json$/i.test(name))
       .map((name) => path.join(ledgerDir, name));
   } catch {
@@ -205,7 +206,7 @@ function buildRecoveryDeleteCandidates(ledger) {
       }
     }
   }
-  return [...candidates];
+  return [...candidates].sort((a, b) => String(a).localeCompare(String(b)));
 }
 
 function recoverInProgressLedgers({

@@ -14,6 +14,7 @@ function collectTmpArtifacts(outputFolder) {
   if (!outputFolder || !fs.existsSync(outputFolder)) return [];
   try {
     return fs.readdirSync(outputFolder)
+      .sort((a, b) => String(a).localeCompare(String(b)))
       .filter((name) => {
         const lower = String(name || '').toLowerCase();
         return lower.endsWith('.tmp') || lower.includes('.tmp.') || lower.endsWith('.partial');
