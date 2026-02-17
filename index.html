@@ -22,6 +22,9 @@
     --azDividerGap:18px;
     --bottomInset:20px;
     --subSectionGap:clamp(12px, 1.8vh, 18px);
+    --settingsSectionGap:clamp(10px, 1.5vh, 14px);
+    --settingsTightGap:8px;
+    --settingsDividerGap:10px;
     --kvToActionGap:18px;
     --settingsFooterPad:14px;
   }
@@ -385,23 +388,40 @@
     padding:24px 24px var(--settingsFooterPad);
     min-height:0;
     overflow-y:auto;
+    scrollbar-width:thin;
+    scrollbar-color: rgba(143,198,255,0.22) rgba(255,255,255,0.04);
   }
-  .settingsCard .row{ margin-top:10px; }
+  .settingsCard::-webkit-scrollbar{ width:8px; }
+  .settingsCard::-webkit-scrollbar-track{
+    background: rgba(255,255,255,0.04);
+    border-radius:999px;
+  }
+  .settingsCard::-webkit-scrollbar-thumb{
+    background: rgba(143,198,255,0.22);
+    border-radius:999px;
+    border:2px solid rgba(0,0,0,0);
+    background-clip:padding-box;
+  }
+  .settingsCard .row{ margin-top:var(--settingsTightGap); }
   .settingsCard .row.first{ margin-top:0; }
   .settingsCard .subSection{ margin-top:var(--subSectionGap); }
-  .settingsCard .inline{ margin-top:10px; gap:12px; }
+  .settingsCard .inline{ margin-top:var(--settingsTightGap); gap:12px; }
   .settingsCard .settingsGroup{
-    margin-top:var(--subSectionGap);
+    margin-top:var(--settingsSectionGap);
     min-width:0;
   }
   .settingsCard .settingsGroup.first{ margin-top:0; }
+  .settingsCard .settingsGroup.first + .divider{
+    margin-top:var(--settingsTightGap);
+    margin-bottom:var(--settingsTightGap);
+  }
   .settingsCard .divider{
     height:1px;
-    margin:var(--azDividerGap) 0;
+    margin:var(--settingsDividerGap) 0;
     background:var(--border);
   }
   .settingsCard .kv{
-    margin-top:calc(var(--subSectionGap) - 2px);
+    margin-top:var(--settingsTightGap);
     margin-bottom:var(--kvToActionGap);
   }
   .settingsCard .settingsGroup .kv{ margin-top:0; }
@@ -409,7 +429,10 @@
   .settingsCard select{ width:min(240px, 100%); }
   .settingsCard #releaseFolderSection{ min-width:0; }
   .settingsCard #albumName{ width:210px; }
-  .settingsCard .actionZone{ margin-top:0; }
+  .settingsCard .actionZone{
+    margin-top:0;
+    gap:var(--settingsTightGap);
+  }
   .settingsCard .actionZone{ padding-bottom:0; }
   .settingsCard .progressWrap{
     border-top:1px solid rgba(255,255,255,0.08);
