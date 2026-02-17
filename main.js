@@ -556,6 +556,12 @@ const currentJob = {
   cleanupContext: null,
 };
 
+const lifecycleGuards = {
+  allowWindowClose: false,
+  allowBeforeQuit: false,
+  shutdownCleanupPromise: null,
+};
+
 const REASON_CODES = Object.freeze({
   CANCELLED: 'CANCELLED',
   TIMEOUT: 'TIMEOUT',
@@ -564,6 +570,50 @@ const REASON_CODES = Object.freeze({
   BIN_INTEGRITY_BYPASS: 'BIN_INTEGRITY_BYPASS',
   UNCAUGHT: 'UNCAUGHT',
 });
+
+async function requestRenderCancellation({
+  reason = REASON_CODES.CANCELLED,
+  source = 'unknown',
+} = {}) {
+  if (!currentJob.active) return { cancelled: false, reason: 'inactive' };
+  if (currentJob.fsm?.isTerminal?.()) return { cancelled: false, reason: 'terminal' };
+
+  currentJob.cancelled = true;
+  currentJob.cancelReason = reason;
+  const jobId = currentJob.id || null;
+  const cleanupContext = currentJob.cleanupContext || null;
+
+  sessionLogger?.warn?.('render.cancel_requested', {
+    jobId,
+    source,
+    reason,
+    hasCleanupContext: Boolean(cleanupContext),
+  });
+
+  if (cleanupContext) {
+    await cleanupJob(jobId, reason, cleanupContext);
+    return { cancelled: true, reason, cleaned: true };
+  }
+
+  if (currentJob.ffmpeg) {
+    await killProcessTree(currentJob.ffmpeg);
+    return { cancelled: true, reason, cleaned: false, killOnly: true };
+  }
+
+  return { cancelled: true, reason, cleaned: false };
+}
+
+async function ensureLifecycleCleanup(source) {
+  if (lifecycleGuards.shutdownCleanupPromise) return lifecycleGuards.shutdownCleanupPromise;
+  lifecycleGuards.shutdownCleanupPromise = (async () => {
+    try {
+      await requestRenderCancellation({ reason: REASON_CODES.CANCELLED, source });
+    } finally {
+      lifecycleGuards.shutdownCleanupPromise = null;
+    }
+  })();
+  return lifecycleGuards.shutdownCleanupPromise;
+}
 
 function ensureBundledBinaries() {
   resolveBundledBinaries();
@@ -1423,15 +1473,26 @@ function movePartialToFinalOutput(partialPath, outputFinalPath) {
     return { exdevFallback: false, method: 'rename' };
   } catch (err) {
     if (err?.code !== 'EXDEV') throw err;
-    fs.copyFileSync(partialPath, outputFinalPath);
-    const stat = fs.statSync(outputFinalPath);
-    if (!stat.isFile() || stat.size <= 0) {
-      const e = new Error(`EXDEV fallback produced invalid output: ${outputFinalPath}`);
-      e.code = REASON_CODES.UNCAUGHT;
-      throw e;
+    const finalTmpPath = `${outputFinalPath}.tmp-finalize-${process.pid}-${Date.now()}`;
+    try {
+      fs.copyFileSync(partialPath, finalTmpPath);
+      try {
+        const fd = fs.openSync(finalTmpPath, 'r');
+        try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+      } catch {}
+      const stat = fs.statSync(finalTmpPath);
+      if (!stat.isFile() || stat.size <= 0) {
+        const e = new Error(`EXDEV fallback produced invalid output: ${finalTmpPath}`);
+        e.code = REASON_CODES.UNCAUGHT;
+        throw e;
+      }
+      fs.renameSync(finalTmpPath, outputFinalPath);
+    } catch (copyErr) {
+      safeUnlink(finalTmpPath);
+      throw copyErr;
     }
     fs.unlinkSync(partialPath);
-    return { exdevFallback: true, method: 'copy_unlink_exdev' };
+    return { exdevFallback: true, method: 'copy_tmp_rename_unlink_exdev' };
   }
 }
 
@@ -1577,6 +1638,7 @@ function extractFallbackReason(stderr) {
 function createWindow() {
   perfMark('createWindow.start');
   mainWindow = new BrowserWindow({
+    title: 'fRender – Album to Video',
     width: 1100,
     height: 760,
     minWidth: 1100,
@@ -1592,7 +1654,34 @@ function createWindow() {
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: true,
+      webSecurity: true,
+      allowRunningInsecureContent: false,
     },
+  });
+  mainWindow.on('close', (event) => {
+    if (lifecycleGuards.allowWindowClose) return;
+    if (!currentJob.active) return;
+    event.preventDefault();
+    if (lifecycleGuards.shutdownCleanupPromise) return;
+    sessionLogger?.warn?.('app.window_close_deferred', {
+      jobId: currentJob.id || null,
+    });
+    void ensureLifecycleCleanup('window_close')
+      .catch((err) => {
+        sessionLogger?.error?.('app.window_close_cleanup_failed', {
+          jobId: currentJob.id || null,
+          message: String(err?.message || err),
+        });
+      })
+      .finally(() => {
+        if (!mainWindow || mainWindow.isDestroyed()) return;
+        lifecycleGuards.allowWindowClose = true;
+        try {
+          mainWindow.close();
+        } finally {
+          lifecycleGuards.allowWindowClose = false;
+        }
+      });
   });
   if (process.platform === 'win32') {
     try { mainWindow.removeMenu(); } catch {}
@@ -1754,8 +1843,33 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
-app.on('before-quit', () => {
+app.on('before-quit', (event) => {
   if (sessionLogger?.info) sessionLogger.info('app.before_quit');
+  if (lifecycleGuards.allowBeforeQuit) return;
+  if (!currentJob.active) return;
+  event.preventDefault();
+  if (lifecycleGuards.shutdownCleanupPromise) return;
+  sessionLogger?.warn?.('app.before_quit_deferred', {
+    jobId: currentJob.id || null,
+  });
+  void ensureLifecycleCleanup('before_quit')
+    .catch((err) => {
+      sessionLogger?.error?.('app.before_quit_cleanup_failed', {
+        jobId: currentJob.id || null,
+        message: String(err?.message || err),
+      });
+    })
+    .finally(() => {
+      lifecycleGuards.allowBeforeQuit = true;
+      app.quit();
+    });
+});
+
+app.on('will-quit', () => {
+  if (sessionLogger?.info) sessionLogger.info('app.will_quit');
+  if (currentJob.ffmpeg) {
+    void killProcessTree(currentJob.ffmpeg);
+  }
   if (sessionLogger?.close) sessionLogger.close();
 });
 
@@ -1871,11 +1985,10 @@ registerIpcHandler('probe-audio', async (_event, filePath) => {
 
 // ---------------- Render job (album-level) ----------------
 registerIpcHandler('cancel-render', async () => {
-  if (!currentJob.active) return true;
-  if (currentJob.fsm?.isTerminal?.()) return true;
-  currentJob.cancelled = true;
-  currentJob.cancelReason = REASON_CODES.CANCELLED;
-  await cleanupJob(currentJob.id, REASON_CODES.CANCELLED, currentJob.cleanupContext);
+  await requestRenderCancellation({
+    reason: REASON_CODES.CANCELLED,
+    source: 'renderer_cancel',
+  });
   return true;
 });
 
@@ -3028,7 +3141,7 @@ registerIpcHandler('render-album', async (event, payload) => {
     }
     finalizeSummary.renameMs = Date.now() - renameStartedAtMs;
     emitFinalizeStep(jobId, 'finalize.rename_outputs.method', {
-      method: exdevFallbackCount > 0 ? 'copy_unlink_exdev' : 'rename',
+      method: exdevFallbackCount > 0 ? 'copy_tmp_rename_unlink_exdev' : 'rename',
       exdevFallback: exdevFallbackCount > 0,
     });
     emitFinalizeStep(jobId, 'finalize.rename_outputs.end', {
