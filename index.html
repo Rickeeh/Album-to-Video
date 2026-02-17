@@ -28,8 +28,6 @@
     --settingsDividerGap:10px;
     --kvToActionGap:18px;
     --settingsFooterPad:14px;
-    --actionButtonMinWidth:128px;
-    --actionButtonHeight:44px;
   }
   *{ box-sizing:border-box; }
   html, body{
@@ -417,12 +415,21 @@
     min-width:0;
   }
   .settingsCard .settingsGroup.first{ margin-top:0; }
+  .settingsCard .settingsGroup.releaseGroup{ margin-top:var(--settingsUnit); }
   .settingsCard .divider{
     height:1px;
     margin:var(--settingsUnit) 0;
     background:var(--border);
   }
   .settingsCard .settingsGroup .inline{ margin-top:0; }
+  .settingsCard .releaseRow{
+    width:min(520px, 100%);
+    margin:0 auto;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:12px;
+  }
   .settingsCard .kv{
     margin-top:calc(var(--subSectionGap) - 2px);
     margin-bottom:var(--kvToActionGap);
@@ -432,14 +439,6 @@
   .settingsCard select{ width:min(240px, 100%); }
   .settingsCard #releaseFolderSection{ min-width:0; }
   .settingsCard #albumName{ width:210px; }
-  .settingsCard .actionRow #renderBtn,
-  .settingsCard .actionRow #cancelBtn{
-    min-width:var(--actionButtonMinWidth);
-    min-height:var(--actionButtonHeight);
-    display:inline-flex;
-    align-items:center;
-    justify-content:center;
-  }
   .settingsCard .actionZone{
     margin-top:0;
   }
@@ -522,8 +521,8 @@
       </div>
     </div>
 
-    <div class="settingsGroup">
-      <div class="inline">
+    <div class="settingsGroup releaseGroup">
+      <div class="inline releaseRow">
         <label><input type="checkbox" id="createAlbumFolder" checked /> Create release folder</label>
         <div id="releaseFolderSection">
           <input type="text" id="albumName" placeholder="Release name" />
@@ -729,6 +728,15 @@
       settingsScrollRaf = null;
       updateSettingsScrollMode();
     });
+  }
+
+  function syncExportButtonSizeToAddAudio() {
+    if (!btnAddTracks || !renderBtn) return;
+    const rect = btnAddTracks.getBoundingClientRect();
+    const w = Math.round(rect.width);
+    const h = Math.round(rect.height);
+    if (w > 0) renderBtn.style.minWidth = `${w}px`;
+    if (h > 0) renderBtn.style.minHeight = `${h}px`;
   }
 
   function clearStatusResetTimer() {
@@ -1530,8 +1538,14 @@
     sortTracksIfSafe();
     scheduleRenderTrackList();
   });
-  window.addEventListener('resize', queueSettingsScrollMode);
-  window.visualViewport?.addEventListener('resize', queueSettingsScrollMode);
+  window.addEventListener('resize', () => {
+    queueSettingsScrollMode();
+    syncExportButtonSizeToAddAudio();
+  });
+  window.visualViewport?.addEventListener('resize', () => {
+    queueSettingsScrollMode();
+    syncExportButtonSizeToAddAudio();
+  });
   coverImg.addEventListener('load', queueSettingsScrollMode);
 
   renderTrackList();
@@ -1541,6 +1555,7 @@
   ensureRenderListeners();
   loadPresets();
   queueSettingsScrollMode();
+  syncExportButtonSizeToAddAudio();
 </script>
 
 </body>
