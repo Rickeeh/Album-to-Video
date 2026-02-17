@@ -38,7 +38,52 @@
     color: var(--text);
     overflow:hidden;
   }
-  .topbar{ display:flex; align-items:flex-start; justify-content:space-between; gap:13px; margin-bottom:var(--topbarGap); }
+  .topbar{
+    position:relative;
+    display:flex;
+    align-items:flex-start;
+    justify-content:space-between;
+    gap:13px;
+    margin-bottom:var(--topbarGap);
+    overflow:hidden;
+  }
+  .topbarMain,
+  .topActions{
+    position:relative;
+    z-index:1;
+  }
+  .brandLine{
+    display:flex;
+    align-items:center;
+    gap:8px;
+  }
+  .brandMarkMini{
+    width:16px;
+    height:16px;
+    flex:0 0 auto;
+    display:none;
+  }
+  .brandHeader-logo .brandMarkMini{ display:block; }
+  .topbarBrandBg{
+    position:absolute;
+    inset:0;
+    display:none;
+    align-items:center;
+    gap:10px;
+    padding-left:10px;
+    pointer-events:none;
+    opacity:0.08;
+    color:#8fc6ff;
+    font-size:18px;
+    font-weight:900;
+    letter-spacing:0.2px;
+  }
+  .brandHeader-bg .topbarBrandBg{ display:flex; }
+  .topbarBrandBg svg{
+    width:20px;
+    height:20px;
+    flex:0 0 auto;
+  }
   .brandTag{ font-size:11px; color:var(--muted); font-weight:850; letter-spacing:0.2px; }
   .title{ font-size:20px; font-weight:900; letter-spacing:0.2px; margin-top:3px; }
   .subtitle{ font-size:13px; color:var(--muted); margin-top:6px; max-width:860px; line-height:1.35; }
@@ -388,8 +433,29 @@
 
 <div class="appShell">
 <div class="topbar">
-  <div>
-    <div class="brandTag">fRender</div>
+  <div class="topbarBrandBg" aria-hidden="true">
+    <svg viewBox="0 0 1000 1000" aria-hidden="true">
+      <rect x="84" y="84" width="832" height="832" rx="160" fill="none" stroke="#8fc6ff" stroke-width="64"/>
+      <rect x="256" y="378" width="72" height="244" rx="36" fill="#8fc6ff"/>
+      <rect x="360" y="288" width="72" height="424" rx="36" fill="#8fc6ff"/>
+      <rect x="464" y="230" width="72" height="540" rx="36" fill="#8fc6ff"/>
+      <rect x="568" y="288" width="72" height="424" rx="36" fill="#8fc6ff"/>
+      <rect x="672" y="378" width="72" height="244" rx="36" fill="#8fc6ff"/>
+    </svg>
+    <span>fRender</span>
+  </div>
+  <div class="topbarMain">
+    <div class="brandLine">
+      <svg class="brandMarkMini" viewBox="0 0 1000 1000" aria-hidden="true">
+        <rect x="84" y="84" width="832" height="832" rx="160" fill="none" stroke="#5aa7ff" stroke-width="64"/>
+        <rect x="256" y="378" width="72" height="244" rx="36" fill="#5aa7ff"/>
+        <rect x="360" y="288" width="72" height="424" rx="36" fill="#5aa7ff"/>
+        <rect x="464" y="230" width="72" height="540" rx="36" fill="#5aa7ff"/>
+        <rect x="568" y="288" width="72" height="424" rx="36" fill="#5aa7ff"/>
+        <rect x="672" y="378" width="72" height="244" rx="36" fill="#5aa7ff"/>
+      </svg>
+      <div class="brandTag">fRender</div>
+    </div>
     <div class="title">Album to Video</div>
     <div class="subtitle">Convert audio to clean MP4 exports. One image. No surprises.</div>
   </div>
@@ -525,6 +591,13 @@
         scale: window.visualViewport.scale,
       } : null,
     });
+  } catch {}
+
+  // Header branding variants: 'off' | 'logo' | 'bg'
+  const BRAND_HEADER_VARIANT = 'logo';
+  try {
+    document.body.classList.toggle('brandHeader-logo', BRAND_HEADER_VARIANT === 'logo');
+    document.body.classList.toggle('brandHeader-bg', BRAND_HEADER_VARIANT === 'bg');
   } catch {}
 
   const audioList = document.getElementById('audioList');
