@@ -21,11 +21,12 @@
     --azTop:16px;
     --azDividerGap:18px;
     --bottomInset:20px;
+    --panelInset:24px;
     --subSectionGap:clamp(12px, 1.8vh, 18px);
     --settingsSectionGap:8px;
     --settingsReleaseGap:12px;
     --kvToActionGap:12px;
-    --settingsFooterPad:14px;
+    --settingsFooterPad:var(--panelInset);
   }
   *{ box-sizing:border-box; }
   html, body{
@@ -233,6 +234,7 @@
     border-radius:12px;
     scrollbar-gutter: stable both-edges;
   }
+  .tracksInner{ padding-bottom:var(--panelInset); }
   .list li{
     display:grid;
     grid-template-columns: 1fr 28px;
@@ -522,7 +524,7 @@
       <button class="danger" id="btnClearTracks">Clear</button>
     </div>
 
-    <ul class="list" id="audioList"></ul>
+    <ul class="list tracksInner" id="audioList"></ul>
   </div>
 
   <div class="card settingsCard">
@@ -547,7 +549,7 @@
       </div>
     </div>
 
-    <div class="settingsGroup footerGroup">
+    <div class="settingsGroup">
       <div class="row first">
         <button class="secondary" id="btnCover">Choose cover art</button>
         <button class="secondary" id="btnExport">Choose export folder</button>
@@ -567,7 +569,7 @@
       </div>
     </div>
 
-    <div class="settingsGroup">
+    <div class="settingsGroup footerGroup">
       <div class="kv">
         <div>Cover art:</div><div class="v" id="coverLabel">Not selected</div>
         <div>Export:</div><div class="v" id="exportLabel">Not selected</div>
