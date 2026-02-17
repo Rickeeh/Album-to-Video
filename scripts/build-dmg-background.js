@@ -24,8 +24,8 @@ function buildBaseSvg() {
         <stop offset="100%" stop-color="#071227"/>
       </linearGradient>
       <radialGradient id="brandGlow" cx="0.12" cy="0.14" r="0.55">
-        <stop offset="0%" stop-color="#14315a" stop-opacity="0.18"/>
-        <stop offset="55%" stop-color="#0f2850" stop-opacity="0.06"/>
+        <stop offset="0%" stop-color="#14315a" stop-opacity="0.12"/>
+        <stop offset="55%" stop-color="#0f2850" stop-opacity="0.03"/>
         <stop offset="100%" stop-color="#0a1b38" stop-opacity="0"/>
       </radialGradient>
       <radialGradient id="installZone" cx="0.46" cy="0.50" r="0.43">
@@ -39,7 +39,7 @@ function buildBaseSvg() {
         <stop offset="100%" stop-color="#bad4ff" stop-opacity="0.38"/>
       </linearGradient>
       <filter id="labelBlur" x="-40%" y="-120%" width="180%" height="340%">
-        <feGaussianBlur stdDeviation="3"/>
+        <feGaussianBlur stdDeviation="2"/>
       </filter>
     </defs>
 
@@ -47,20 +47,20 @@ function buildBaseSvg() {
     <rect x="0" y="0" width="${WIDTH}" height="${HEIGHT}" fill="url(#brandGlow)"/>
     <rect x="110" y="128" width="440" height="210" rx="36" fill="url(#installZone)"/>
 
-    <g opacity="0.07" stroke="#4b86d7" fill="none">
+    <g opacity="0.03" stroke="#4b86d7" fill="none">
       <circle cx="92" cy="78" r="66" stroke-width="1.4"/>
       <circle cx="92" cy="78" r="94" stroke-width="1"/>
       <circle cx="92" cy="78" r="122" stroke-width="0.8"/>
     </g>
 
-    <g opacity="0.49" stroke="url(#arrowStroke)" fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <g opacity="0.53" stroke="url(#arrowStroke)" fill="none" stroke-linecap="round" stroke-linejoin="round">
       <path d="M ${MID_X - 24} ${ICON_Y} L ${MID_X + 24} ${ICON_Y}" stroke-width="4"/>
       <path d="M ${MID_X + 24} ${ICON_Y} L ${MID_X + 13} ${ICON_Y - 9}" stroke-width="4"/>
       <path d="M ${MID_X + 24} ${ICON_Y} L ${MID_X + 13} ${ICON_Y + 9}" stroke-width="4"/>
     </g>
 
-    <rect x="${ICON_APP_X - 70}" y="323" width="140" height="26" rx="13" fill="#edf5ff" fill-opacity="0.08" filter="url(#labelBlur)"/>
-    <rect x="${ICON_APPS_X - 74}" y="323" width="148" height="26" rx="13" fill="#edf5ff" fill-opacity="0.08" filter="url(#labelBlur)"/>
+    <rect x="${ICON_APP_X - 66}" y="325" width="132" height="21" rx="10.5" fill="#edf5ff" fill-opacity="0.09" filter="url(#labelBlur)"/>
+    <rect x="${ICON_APPS_X - 70}" y="325" width="140" height="21" rx="10.5" fill="#edf5ff" fill-opacity="0.09" filter="url(#labelBlur)"/>
   </svg>`;
 }
 
@@ -99,7 +99,7 @@ async function main() {
     .toBuffer();
 
   const lockup = await sharp(LOCKUP_SVG)
-    .resize({ width: 182 })
+    .resize({ width: 138 })
     .toColourspace('srgb')
     .png({ compressionLevel: 6, adaptiveFiltering: true })
     .toBuffer();
@@ -108,7 +108,7 @@ async function main() {
 
   await sharp(base)
     .composite([
-      { input: lockup, left: 16, top: 28, blend: 'over', opacity: 0.58 },
+      { input: lockup, left: 12, top: 18, blend: 'over', opacity: 0.92 },
       { input: noise.data, raw: noise.info, blend: 'overlay', opacity: 0.24 },
     ])
     .flatten({ background: '#071227' })
