@@ -22,11 +22,14 @@
     --azDividerGap:18px;
     --bottomInset:20px;
     --subSectionGap:clamp(12px, 1.8vh, 18px);
+    --settingsUnit:8px;
     --settingsSectionGap:clamp(10px, 1.5vh, 14px);
     --settingsTightGap:8px;
     --settingsDividerGap:10px;
     --kvToActionGap:18px;
     --settingsFooterPad:14px;
+    --actionButtonMinWidth:128px;
+    --actionButtonHeight:44px;
   }
   *{ box-sizing:border-box; }
   html, body{
@@ -410,19 +413,20 @@
   .settingsCard .subSection{ margin-top:var(--subSectionGap); }
   .settingsCard .inline{ margin-top:var(--settingsTightGap); gap:12px; }
   .settingsCard .settingsGroup{
-    margin-top:var(--settingsSectionGap);
+    margin-top:0;
     min-width:0;
   }
   .settingsCard .settingsGroup.first{ margin-top:0; }
   .settingsCard .settingsGroup.first + .divider{
-    margin-top:var(--settingsTightGap);
-    margin-bottom:var(--settingsTightGap);
+    margin-top:var(--settingsUnit);
+    margin-bottom:var(--settingsUnit);
   }
   .settingsCard .divider{
     height:1px;
-    margin:var(--settingsDividerGap) 0;
+    margin:var(--settingsUnit) 0;
     background:var(--border);
   }
+  .settingsCard .settingsGroup .inline{ margin-top:0; }
   .settingsCard .kv{
     margin-top:var(--settingsTightGap);
     margin-bottom:var(--kvToActionGap);
@@ -432,6 +436,14 @@
   .settingsCard select{ width:min(240px, 100%); }
   .settingsCard #releaseFolderSection{ min-width:0; }
   .settingsCard #albumName{ width:210px; }
+  .settingsCard .actionRow #renderBtn,
+  .settingsCard .actionRow #cancelBtn{
+    min-width:var(--actionButtonMinWidth);
+    min-height:var(--actionButtonHeight);
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+  }
   .settingsCard .actionZone{
     margin-top:0;
     gap:var(--settingsTightGap);
