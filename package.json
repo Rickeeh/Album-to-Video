@@ -134,11 +134,11 @@
       "contents": [
         {
           "x": 189,
-          "y": 235
+          "y": 229
         },
         {
           "x": 469,
-          "y": 235,
+          "y": 229,
           "type": "link",
           "path": "/Applications"
         }
