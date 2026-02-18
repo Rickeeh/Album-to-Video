@@ -38,6 +38,9 @@ const { getPreset, listPresets } = require('./src/main/presets');
 let mainWindow = null;
 let sessionLogger = null;
 let lastSelectedExportFolder = null;
+let dialogInFlight = null;
+let renderAlbumInFlight = false;
+const releaseFolderPreflight = new Map();
 const RENDER_SIGNAL_TAIL_MAX = 200;
 const renderSignalTail = [];
 let latestStartupPartialScan = null;
@@ -155,6 +158,18 @@ function registerIpcHandler(methodName, handler) {
       throw err;
     }
   });
+}
+
+async function runDialogSingleFlight(fallbackValue, opener) {
+  if (dialogInFlight) return fallbackValue;
+  dialogInFlight = (async () => {
+    try {
+      return await opener();
+    } finally {
+      dialogInFlight = null;
+    }
+  })();
+  return await dialogInFlight;
 }
 
 perfMark('app.start', { pid: process.pid, platform: process.platform, arch: process.arch });
@@ -815,6 +830,43 @@ function ensureWritableDir(dirPath) {
   }
 }
 
+function isIgnorablePreExistingEntry(name) {
+  const value = String(name || '');
+  if (!value) return true;
+  if (value === '.DS_Store' || value === 'Thumbs.db') return true;
+  if (value.startsWith('._')) return true;
+  if (value === 'Logs') return true;
+  return false;
+}
+
+function inspectOutputFolderPreflight(folderPath) {
+  const safeFolder = resolveExistingDirectoryPath(folderPath, 'Export folder');
+  let outputFolderExistedBefore = false;
+  let outputFolderHadUserContentBefore = false;
+
+  try {
+    const stat = fs.statSync(safeFolder);
+    outputFolderExistedBefore = Boolean(stat?.isDirectory?.());
+  } catch {}
+
+  if (outputFolderExistedBefore) {
+    try {
+      const entries = fs.readdirSync(safeFolder, { withFileTypes: true });
+      outputFolderHadUserContentBefore = entries.some((entry) => {
+        const name = String(entry?.name || '');
+        return !isIgnorablePreExistingEntry(name);
+      });
+    } catch {
+      outputFolderHadUserContentBefore = false;
+    }
+  }
+
+  return {
+    outputFolderExistedBefore,
+    outputFolderHadUserContentBefore,
+  };
+}
+
 function resolveLegacyLogsRootPath() {
   const currentLogsRoot = app.getPath('logs');
   return path.join(path.dirname(currentLogsRoot), LEGACY_LOGS_ROOT_NAME);
@@ -1215,6 +1267,7 @@ async function buildRenderPlan(payload) {
     imagePath,
     exportFolder,
     presetKey,
+    createAlbumFolder,
   } = payload || {};
 
   ensureBundledBinaries();
@@ -1230,6 +1283,12 @@ async function buildRenderPlan(payload) {
   const resolvedExportFolder = resolveExistingDirectoryPath(requestedExportFolder, 'Export folder');
   assertPathWithinBase(selectedExportFolder, resolvedExportFolder, 'Export folder');
   ensureWritableDir(resolvedExportFolder);
+
+  const rememberedPreflight = Boolean(createAlbumFolder)
+    ? releaseFolderPreflight.get(resolvedExportFolder)
+    : null;
+  const preflight = rememberedPreflight || inspectOutputFolderPreflight(resolvedExportFolder);
+  if (rememberedPreflight) releaseFolderPreflight.delete(resolvedExportFolder);
 
   const preset = getPreset(presetKey);
   const resolvedPresetKey = preset.key;
@@ -1321,6 +1380,8 @@ async function buildRenderPlan(payload) {
   return {
     jobId,
     exportFolder: resolvedExportFolder,
+    outputFolderExistedBefore: Boolean(preflight.outputFolderExistedBefore),
+    outputFolderHadUserContentBefore: Boolean(preflight.outputFolderHadUserContentBefore),
     presetKey: resolvedPresetKey,
     presetDecisions,
     imagePath,
@@ -1637,14 +1698,19 @@ function extractFallbackReason(stderr) {
 
 function createWindow() {
   perfMark('createWindow.start');
+  const BASE_W = 1100;
+  const BASE_H = 760;
+  const WIN_H = 792;
+  const windowHeight = process.platform === 'win32' ? WIN_H : BASE_H;
+
   mainWindow = new BrowserWindow({
     title: 'fRender – Album to Video',
-    width: 1100,
-    height: 760,
-    minWidth: 1100,
-    minHeight: 760,
-    maxWidth: 1100,
-    maxHeight: 760,
+    width: BASE_W,
+    height: windowHeight,
+    minWidth: BASE_W,
+    minHeight: windowHeight,
+    maxWidth: BASE_W,
+    maxHeight: windowHeight,
     resizable: false,
     maximizable: false,
     backgroundColor: '#0c0f14',
@@ -1875,35 +1941,41 @@ app.on('will-quit', () => {
 
 // ---------------- Dialogs ----------------
 registerIpcHandler('select-audios', async () => {
-  const result = await dialog.showOpenDialog({
-    properties: ['openFile', 'multiSelections'],
-    filters: [
-      { name: 'Audio', extensions: ['mp3', 'wav', 'aif', 'aiff', 'flac', 'm4a', 'aac', 'ogg'] },
-      { name: 'All Files', extensions: ['*'] },
-    ],
+  return await runDialogSingleFlight([], async () => {
+    const result = await dialog.showOpenDialog({
+      properties: ['openFile', 'multiSelections'],
+      filters: [
+        { name: 'Audio', extensions: ['mp3', 'wav', 'aif', 'aiff', 'flac', 'm4a', 'aac', 'ogg'] },
+        { name: 'All Files', extensions: ['*'] },
+      ],
+    });
+    return result.canceled ? [] : (result.filePaths || []);
   });
-  return result.canceled ? [] : (result.filePaths || []);
 });
 
 registerIpcHandler('select-image', async () => {
-  const result = await dialog.showOpenDialog({
-    properties: ['openFile'],
-    filters: [
-      { name: 'Images', extensions: ['jpg', 'jpeg', 'png', 'webp'] },
-      { name: 'All Files', extensions: ['*'] },
-    ],
+  return await runDialogSingleFlight(null, async () => {
+    const result = await dialog.showOpenDialog({
+      properties: ['openFile'],
+      filters: [
+        { name: 'Images', extensions: ['jpg', 'jpeg', 'png', 'webp'] },
+        { name: 'All Files', extensions: ['*'] },
+      ],
+    });
+    return result.canceled ? null : (result.filePaths?.[0] || null);
   });
-  return result.canceled ? null : (result.filePaths?.[0] || null);
 });
 
 registerIpcHandler('select-folder', async () => {
-  const result = await dialog.showOpenDialog({ properties: ['openDirectory'] });
-  if (result.canceled) return null;
-  const pickedPath = result.filePaths?.[0] || null;
-  if (!pickedPath) return null;
-  const safePath = resolveExistingDirectoryPath(pickedPath, 'Export folder');
-  lastSelectedExportFolder = safePath;
-  return safePath;
+  return await runDialogSingleFlight(null, async () => {
+    const result = await dialog.showOpenDialog({ properties: ['openDirectory'] });
+    if (result.canceled) return null;
+    const pickedPath = result.filePaths?.[0] || null;
+    if (!pickedPath) return null;
+    const safePath = resolveExistingDirectoryPath(pickedPath, 'Export folder');
+    lastSelectedExportFolder = safePath;
+    return safePath;
+  });
 });
 
 registerIpcHandler('list-presets', async () => listPresets());
@@ -1922,9 +1994,30 @@ registerIpcHandler('ensure-dir', async (_event, payload) => {
   const rawAlbumFolderName = payload.albumFolderName;
   const albumFolderName = sanitizeAlbumFolderName(rawAlbumFolderName);
   const requestedDir = path.join(selectedExportFolder, albumFolderName);
+
+  const existedBefore = fs.existsSync(requestedDir);
+  let outputFolderHadUserContentBefore = false;
+  if (existedBefore) {
+    try {
+      const stat = fs.statSync(requestedDir);
+      if (!stat.isDirectory()) throw new Error('Release folder path is not a directory.');
+      const entries = fs.readdirSync(requestedDir, { withFileTypes: true });
+      outputFolderHadUserContentBefore = entries.some((entry) => {
+        const name = String(entry?.name || '');
+        return !isIgnorablePreExistingEntry(name);
+      });
+    } catch (err) {
+      throw new Error(`Release folder not accessible: ${requestedDir}. ${err.message}`);
+    }
+  }
+
   ensureDir(requestedDir);
   const resolvedDir = resolveExistingDirectoryPath(requestedDir, 'Release folder');
   assertPathWithinBase(selectedExportFolder, resolvedDir, 'Release folder');
+  releaseFolderPreflight.set(resolvedDir, {
+    outputFolderExistedBefore: Boolean(existedBefore),
+    outputFolderHadUserContentBefore: Boolean(outputFolderHadUserContentBefore),
+  });
   return resolvedDir;
 });
 
@@ -2534,7 +2627,29 @@ function runFfmpegStillImage({
 }
 
 registerIpcHandler('render-album', async (event, payload) => {
-  await startupRecoveryPromise;
+  if (currentJob.active || renderAlbumInFlight) {
+    const reason = 'EXPORT_ALREADY_RUNNING';
+    const humanMessage = 'Export already running.';
+    sessionLogger?.warn?.('ipc.render_album.rejected_already_running', {
+      reason,
+      active: Boolean(currentJob.active),
+      inFlight: Boolean(renderAlbumInFlight),
+      jobId: currentJob.id || null,
+    });
+    return {
+      ok: false,
+      reason,
+      humanMessage,
+      error: {
+        code: reason,
+        message: humanMessage,
+      },
+    };
+  }
+
+  renderAlbumInFlight = true;
+  try {
+    await startupRecoveryPromise;
   const payloadObj = (payload && typeof payload === 'object' && !Array.isArray(payload)) ? payload : {};
   sessionLogger?.info?.('ipc.render_album.received', {
     hasPayload: Boolean(payload),
@@ -2592,12 +2707,16 @@ registerIpcHandler('render-album', async (event, payload) => {
     currentTrackTmpPath: null,
     partialPaths: new Set(),
     tmpPaths: new Set(),
+    inFinalize: false,
+    finalizingPartials: new Set(),
     plannedFinalOutputs: new Set(plan.tracks.map((t) => t.outputFinalPath)),
     completedFinalOutputs: new Set(),
     stagingPaths: new Set(),
     stagingClosers: new Set(),
     outputFolder: exportFolder,
     baseExportFolder: lastSelectedExportFolder || null,
+    outputFolderExistedBefore: Boolean(plan.outputFolderExistedBefore),
+    outputFolderHadUserContentBefore: Boolean(plan.outputFolderHadUserContentBefore),
     createAlbumFolder: Boolean(createAlbumFolder),
     safeRmdirIfEmpty,
     logger: sessionLogger,
@@ -3125,19 +3244,30 @@ registerIpcHandler('render-album', async (event, payload) => {
     const renameStartedAtMs = Date.now();
     let renamedCount = 0;
     let exdevFallbackCount = 0;
-    for (const trackPlan of tracks) {
-      const partialPath = trackPlan.partialPath;
-      const outputFinalPath = trackPlan.outputFinalPath;
-      assertPathWithinBase(selectedExportFolder, partialPath, 'Partial output');
-      assertPathWithinBase(selectedExportFolder, outputFinalPath, 'Final output');
-      validatePartialOutput(partialPath);
-      const moveResult = movePartialToFinalOutput(partialPath, outputFinalPath);
-      if (moveResult.exdevFallback) exdevFallbackCount += 1;
-      currentJob.cleanupContext.partialPaths.delete(partialPath);
-      currentJob.cleanupContext.tmpPaths.delete(partialPath);
-      currentJob.cleanupContext.completedFinalOutputs.add(outputFinalPath);
-      rendered.push({ audioPath: trackPlan.audioPath, outputPath: outputFinalPath });
-      renamedCount += 1;
+    currentJob.cleanupContext.inFinalize = true;
+    try {
+      for (const trackPlan of tracks) {
+        const partialPath = trackPlan.partialPath;
+        const outputFinalPath = trackPlan.outputFinalPath;
+        const cleanupContext = currentJob.cleanupContext;
+        assertPathWithinBase(selectedExportFolder, partialPath, 'Partial output');
+        assertPathWithinBase(selectedExportFolder, outputFinalPath, 'Final output');
+        cleanupContext.partialPaths.delete(partialPath);
+        cleanupContext.tmpPaths.delete(partialPath);
+        cleanupContext.finalizingPartials.add(partialPath);
+        try {
+          validatePartialOutput(partialPath);
+          const moveResult = movePartialToFinalOutput(partialPath, outputFinalPath);
+          if (moveResult.exdevFallback) exdevFallbackCount += 1;
+          cleanupContext.completedFinalOutputs.add(outputFinalPath);
+          rendered.push({ audioPath: trackPlan.audioPath, outputPath: outputFinalPath });
+          renamedCount += 1;
+        } finally {
+          cleanupContext.finalizingPartials.delete(partialPath);
+        }
+      }
+    } finally {
+      currentJob.cleanupContext.inFinalize = false;
     }
     finalizeSummary.renameMs = Date.now() - renameStartedAtMs;
     emitFinalizeStep(jobId, 'finalize.rename_outputs.method', {
@@ -3297,5 +3427,8 @@ registerIpcHandler('render-album', async (event, payload) => {
     currentJob.cleanupContext = null;
     currentJob.id = null;
     currentJob.fsm = null;
+  }
+  } finally {
+    renderAlbumInFlight = false;
   }
 });
