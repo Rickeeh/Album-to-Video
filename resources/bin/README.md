@@ -22,4 +22,7 @@ npm run bootstrap:mac-bins -- --force
 
 Run that command once on Apple Silicon and once on Intel macOS so both folders exist locally.
 
-Universal mac builds (`npm run dist:mac`) verify these files before packaging.
+Dual-arch mac builds verify these files before packaging:
+
+- `npm run dist:mac:arm64`
+- `npm run dist:mac:x64`
