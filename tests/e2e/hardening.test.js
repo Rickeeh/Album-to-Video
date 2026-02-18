@@ -17,6 +17,20 @@ function assertOk(condition, message) {
   if (!condition) fail(message);
 }
 
+function safeRmdirIfEmpty(dirPath) {
+  try {
+    if (!dirPath || !fs.existsSync(dirPath)) return;
+    const entries = fs.readdirSync(dirPath);
+    const removable = new Set(['.DS_Store', 'Thumbs.db']);
+    entries
+      .filter((name) => removable.has(name) || name.startsWith('._'))
+      .forEach((name) => {
+        try { fs.unlinkSync(path.join(dirPath, name)); } catch {}
+      });
+    if (fs.readdirSync(dirPath).length === 0) fs.rmdirSync(dirPath);
+  } catch {}
+}
+
 function createJsonlLogger(filePath) {
   const write = (level, msg, data) => {
     const payload = {
@@ -333,7 +347,7 @@ async function runCancelFinalizingCleanupTest() {
     outputFolder,
     baseExportFolder,
     createAlbumFolder: true,
-    safeRmdirIfEmpty: () => {},
+    safeRmdirIfEmpty,
     logger: createJsonlLogger(auditLogPath),
   };
 

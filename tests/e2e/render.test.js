@@ -27,6 +27,20 @@ function assertOk(condition, message) {
   process.exit(1);
 }
 
+function safeRmdirIfEmpty(dirPath) {
+  try {
+    if (!dirPath || !fs.existsSync(dirPath)) return;
+    const entries = fs.readdirSync(dirPath);
+    const removable = new Set([".DS_Store", "Thumbs.db"]);
+    entries
+      .filter((name) => removable.has(name) || name.startsWith("._"))
+      .forEach((name) => {
+        try { fs.unlinkSync(path.join(dirPath, name)); } catch {}
+      });
+    if (fs.readdirSync(dirPath).length === 0) fs.rmdirSync(dirPath);
+  } catch {}
+}
+
 async function runCancelBatchCleanupScenario() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "album-to-video-cancel-e2e-"));
   const outputFolder = path.join(root, "Release");
@@ -64,7 +78,7 @@ async function runCancelBatchCleanupScenario() {
     stagingClosers: new Set(),
     outputFolder,
     createAlbumFolder: true,
-    safeRmdirIfEmpty: () => {},
+    safeRmdirIfEmpty,
     logger: null,
   };
 

@@ -1,5 +1,4 @@
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
 
 function safeUnlink(filePath) {
@@ -22,6 +21,17 @@ function collectTmpArtifacts(outputFolder) {
       .map((name) => path.join(outputFolder, name));
   } catch {
     return [];
+  }
+}
+
+function normalizePathForCompare(filePath) {
+  const raw = String(filePath || '').trim();
+  if (!raw) return '';
+  try {
+    const resolved = path.resolve(raw);
+    return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+  } catch {
+    return process.platform === 'win32' ? raw.toLowerCase() : raw;
   }
 }
 
@@ -60,109 +70,6 @@ function defaultCleanupStats() {
   };
 }
 
-function isPathWithinBase(basePath, targetPath) {
-  const rel = path.relative(basePath, targetPath);
-  if (!rel) return true;
-  return !rel.startsWith('..') && !path.isAbsolute(rel);
-}
-
-function realpathOrResolve(p) {
-  const abs = path.resolve(String(p || ''));
-  try {
-    return fs.realpathSync.native(abs);
-  } catch {
-    return abs;
-  }
-}
-
-function isDangerousDeleteTarget(outputFolder) {
-  const normalized = realpathOrResolve(outputFolder);
-  if (!path.isAbsolute(normalized)) {
-    return { dangerous: true, reason: 'not_absolute', normalized };
-  }
-
-  const root = path.parse(normalized).root;
-  if (normalized === root) {
-    return { dangerous: true, reason: 'filesystem_root', normalized };
-  }
-
-  const home = realpathOrResolve(os.homedir());
-  if (normalized === home) {
-    return { dangerous: true, reason: 'home_directory', normalized };
-  }
-
-  const desktop = path.join(home, 'Desktop');
-  if (normalized === desktop) {
-    return { dangerous: true, reason: 'desktop_directory', normalized };
-  }
-
-  const depth = normalized
-    .slice(root.length)
-    .split(path.sep)
-    .filter(Boolean)
-    .length;
-  if (depth < 2) {
-    return { dangerous: true, reason: 'path_too_shallow', normalized };
-  }
-
-  return { dangerous: false, reason: null, normalized };
-}
-
-function canRemoveOutputFolder(outputFolder, baseExportFolder) {
-  if (!outputFolder) {
-    return { ok: false, reason: 'missing_output_folder' };
-  }
-
-  const dangerCheck = isDangerousDeleteTarget(outputFolder);
-  if (dangerCheck.dangerous) {
-    return { ok: false, reason: dangerCheck.reason, outputFolder: dangerCheck.normalized };
-  }
-
-  const realOutputFolder = dangerCheck.normalized;
-  const logsMarkerPath = path.join(realOutputFolder, 'Logs');
-  let hasLogsMarker = false;
-  try {
-    hasLogsMarker = fs.existsSync(logsMarkerPath) && fs.statSync(logsMarkerPath).isDirectory();
-  } catch {}
-
-  let withinBaseExport = false;
-  let sameAsBase = false;
-  let realBaseExportFolder = null;
-  if (baseExportFolder) {
-    realBaseExportFolder = realpathOrResolve(baseExportFolder);
-    sameAsBase = realOutputFolder === realBaseExportFolder;
-    withinBaseExport = isPathWithinBase(realBaseExportFolder, realOutputFolder) && !sameAsBase;
-  }
-
-  if (sameAsBase) {
-    return {
-      ok: false,
-      reason: 'output_equals_base_export',
-      outputFolder: realOutputFolder,
-      baseExportFolder: realBaseExportFolder,
-    };
-  }
-
-  if (!withinBaseExport && !hasLogsMarker) {
-    return {
-      ok: false,
-      reason: 'outside_base_and_missing_marker',
-      outputFolder: realOutputFolder,
-      baseExportFolder: realBaseExportFolder,
-      logsMarkerPath,
-    };
-  }
-
-  return {
-    ok: true,
-    reason: null,
-    outputFolder: realOutputFolder,
-    baseExportFolder: realBaseExportFolder,
-    withinBaseExport,
-    hasLogsMarker,
-  };
-}
-
 async function cleanupJob(jobId, reason, context) {
   if (!context) return defaultCleanupStats();
   if (context.cleanupPromise) return await context.cleanupPromise;
@@ -196,28 +103,48 @@ async function cleanupJob(jobId, reason, context) {
     context.cleanedUp = true;
 
     const filesToDelete = new Set();
+    const finalizingPartials = new Set();
+    if (context.finalizingPartials instanceof Set) {
+      for (const p of context.finalizingPartials) {
+        const normalized = normalizePathForCompare(p);
+        if (normalized) finalizingPartials.add(normalized);
+      }
+    }
+    let skippedFinalizePartialCount = 0;
+    const queueDeletion = (filePath) => {
+      if (!filePath) return;
+      const normalized = normalizePathForCompare(filePath);
+      if (normalized && finalizingPartials.has(normalized)) {
+        skippedFinalizePartialCount += 1;
+        return;
+      }
+      filesToDelete.add(filePath);
+    };
     if (context.stagingClosers instanceof Set) {
       for (const closer of context.stagingClosers) {
         try { closer(); } catch {}
       }
     }
-    if (context.currentTrackPartialPath) filesToDelete.add(context.currentTrackPartialPath);
-    if (context.currentTrackTmpPath) filesToDelete.add(context.currentTrackTmpPath);
+    if (context.currentTrackPartialPath) queueDeletion(context.currentTrackPartialPath);
+    if (context.currentTrackTmpPath) queueDeletion(context.currentTrackTmpPath);
     if (context.partialPaths instanceof Set) {
-      for (const p of context.partialPaths) filesToDelete.add(p);
+      for (const p of context.partialPaths) queueDeletion(p);
     }
     if (context.tmpPaths instanceof Set) {
-      for (const p of context.tmpPaths) filesToDelete.add(p);
+      for (const p of context.tmpPaths) queueDeletion(p);
     }
     if (context.stagingPaths instanceof Set) {
-      for (const p of context.stagingPaths) filesToDelete.add(p);
+      for (const p of context.stagingPaths) queueDeletion(p);
     }
-    for (const p of collectTmpArtifacts(context.outputFolder)) filesToDelete.add(p);
+    for (const p of collectTmpArtifacts(context.outputFolder)) queueDeletion(p);
 
     if (reason === 'CANCELLED' && context.plannedFinalOutputs instanceof Set) {
-      for (const p of context.plannedFinalOutputs) filesToDelete.add(p);
+      for (const p of context.plannedFinalOutputs) queueDeletion(p);
+      if (context.completedFinalOutputs instanceof Set) {
+        for (const p of context.completedFinalOutputs) queueDeletion(p);
+      }
       if (context.outputFolder) {
-        filesToDelete.add(path.join(context.outputFolder, 'Logs', 'render-report.json'));
+        queueDeletion(path.join(context.outputFolder, 'Logs', 'render-report.json'));
       }
     }
 
@@ -233,24 +160,40 @@ async function cleanupJob(jobId, reason, context) {
     }
 
     if (context.createAlbumFolder) {
-      if (reason === 'CANCELLED') {
-        const guard = canRemoveOutputFolder(context.outputFolder, context.baseExportFolder);
-        if (!guard.ok) {
-          if (logger?.warn) logger.warn('cleanup.remove_folder_blocked', { ...logData, ...guard });
-        } else {
+      const hadUserContentBefore = Boolean(context.outputFolderHadUserContentBefore);
+      if (hadUserContentBefore) {
+        if (logger?.warn) {
+          logger.warn('cleanup.remove_folder_blocked', {
+            ...logData,
+            reason: 'preexisting_user_content',
+            outputFolderExistedBefore: Boolean(context.outputFolderExistedBefore),
+            outputFolderHadUserContentBefore: true,
+          });
+        }
+      } else if (typeof context.safeRmdirIfEmpty === 'function') {
+        if (context.outputFolder) {
+          const logsDir = path.join(context.outputFolder, 'Logs');
           try {
-            fs.rmSync(guard.outputFolder, { recursive: true, force: true });
+            if (fs.existsSync(logsDir) && fs.statSync(logsDir).isDirectory()) {
+              const logsEntries = fs.readdirSync(logsDir);
+              if (logsEntries.length === 0) fs.rmdirSync(logsDir);
+            }
           } catch {}
         }
-        stats.cleanupRemovedEmptyFolder = !fs.existsSync(context.outputFolder);
-      } else if (typeof context.safeRmdirIfEmpty === 'function') {
         context.safeRmdirIfEmpty(context.outputFolder);
         stats.cleanupRemovedEmptyFolder = !fs.existsSync(context.outputFolder);
       }
     }
 
     context.cleanupStats = stats;
-    if (logger?.info) logger.info('cleanup.end', { ...logData, removedCount: filesToDelete.size, ...stats });
+    if (logger?.info) {
+      logger.info('cleanup.end', {
+        ...logData,
+        removedCount: filesToDelete.size,
+        skippedFinalizePartialCount,
+        ...stats,
+      });
+    }
     return stats;
   })();
 
