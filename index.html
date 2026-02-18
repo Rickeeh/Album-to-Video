@@ -692,6 +692,9 @@
 
   let isRendering = false;
   let isValidating = false;
+  let audioDialogInFlight = false;
+  let imageDialogInFlight = false;
+  let folderDialogInFlight = false;
   let renderQueue = [];
 
   let lastFinalExportFolder = null;
@@ -1008,7 +1011,7 @@
   }
 
   function renderTrackList() {
-    audioList.innerHTML = '';
+    audioList.replaceChildren();
 
     tracks.forEach((t) => {
       const li = document.createElement('li');
@@ -1119,7 +1122,7 @@
     }
 
     presetCatalog = presets;
-    presetSelect.innerHTML = '';
+    presetSelect.replaceChildren();
     presets.forEach((preset) => {
       const opt = document.createElement('option');
       opt.value = preset.key;
@@ -1136,112 +1139,136 @@
   }
 
   async function pickAudios() {
-    if (isValidating) return;
-    const files = await window.api.selectAudios();
-    if (!files || !files.length) return;
-
-    const newFiles = files.filter((f) => !trackPathSet.has(f));
-    if (!newFiles.length) return;
-
-    isValidating = true;
+    if (isValidating || isRendering || audioDialogInFlight) return;
+    audioDialogInFlight = true;
     btnAddTracks.disabled = true;
-    btnNewAlbum.disabled = true;
-    let validatingToast = null;
-    const validatingToastTimer = setTimeout(() => {
-      validatingToast = showToast('Validating audio', 'info', 999999);
-    }, 180);
 
     try {
-      newFiles.forEach((f) => trackPathSet.add(f));
+      const files = await window.api.selectAudios();
+      if (!files || !files.length) return;
 
-      const probeResults = await probeFilesWithLimit(newFiles, 4);
+      const newFiles = files.filter((f) => !trackPathSet.has(f));
+      if (!newFiles.length) return;
 
-      for (const f of newFiles) {
-        const probe = probeResults.get(f);
-        if (!probe?.ok) {
-          const name = pathBasename(f);
-          showToast(`Skipped unsupported file: ${name}`, 'warn', 3000);
-          trackPathSet.delete(f);
-          continue;
+      isValidating = true;
+      btnNewAlbum.disabled = true;
+      let validatingToast = null;
+      const validatingToastTimer = setTimeout(() => {
+        validatingToast = showToast('Validating audio', 'info', 999999);
+      }, 180);
+
+      try {
+        newFiles.forEach((f) => trackPathSet.add(f));
+
+        const probeResults = await probeFilesWithLimit(newFiles, 4);
+
+        for (const f of newFiles) {
+          const probe = probeResults.get(f);
+          if (!probe?.ok) {
+            const name = pathBasename(f);
+            showToast(`Skipped unsupported file: ${name}`, 'warn', 3000);
+            trackPathSet.delete(f);
+            continue;
+          }
+
+          const originalBaseRaw = pathBasenameNoExt(f);
+          const originalBase = stripLeadingTrackNumber(originalBaseRaw);
+
+          tracks.push({
+            path: f,
+            displayName: originalBase + ' (reading tags)',
+            outputBase: originalBase,
+            originalBase,
+            durationSec: Math.max(0, Number(probe?.durationSec) || 0),
+            trackNo: null,
+            hasTrackNo: false,
+            inputOrder: nextTrackOrder++,
+          });
         }
 
-        const originalBaseRaw = pathBasenameNoExt(f);
-        const originalBase = stripLeadingTrackNumber(originalBaseRaw);
-
-        tracks.push({
-          path: f,
-          displayName: originalBase + ' (reading tags)',
-          outputBase: originalBase,
-          originalBase,
-          durationSec: Math.max(0, Number(probe?.durationSec) || 0),
-          trackNo: null,
-          hasTrackNo: false,
-          inputOrder: nextTrackOrder++,
-        });
-      }
-
-      scheduleRenderTrackList();
-
-      for (const t of tracks) {
-        if (!t.displayName.includes('(reading tags)')) continue;
-
-        try {
-          const info = await window.api.readMetadata(t.path);
-          const artist = (info.artist || '').trim();
-          const title = (info.title || '').trim();
-          const album = (info.album || '').trim();
-
-          const tn = info.trackNo;
-          const trackNo = Number.isFinite(Number(tn)) ? Number(tn) : null;
-          const hasTrackNo = Number.isFinite(trackNo) && trackNo > 0;
-
-          let outputBase = '';
-          if (artist && title) outputBase = `${artist} - ${title}`;
-          else if (title) outputBase = title;
-          else outputBase = t.originalBase;
-
-          t.outputBase = sanitizeFileBaseName(stripLeadingTrackNumber(outputBase));
-          t.displayName = t.outputBase;
-          t.trackNo = hasTrackNo ? trackNo : null;
-          t.hasTrackNo = hasTrackNo;
-
-          if (!albumNameEl.value.trim() && album) albumNameEl.value = album;
-        } catch {
-          t.displayName = sanitizeFileBaseName(t.originalBase);
-          t.outputBase = sanitizeFileBaseName(t.originalBase);
-        }
-
-        sortTracksIfSafe();
         scheduleRenderTrackList();
+
+        for (const t of tracks) {
+          if (!t.displayName.includes('(reading tags)')) continue;
+
+          try {
+            const info = await window.api.readMetadata(t.path);
+            const artist = (info.artist || '').trim();
+            const title = (info.title || '').trim();
+            const album = (info.album || '').trim();
+
+            const tn = info.trackNo;
+            const trackNo = Number.isFinite(Number(tn)) ? Number(tn) : null;
+            const hasTrackNo = Number.isFinite(trackNo) && trackNo > 0;
+
+            let outputBase = '';
+            if (artist && title) outputBase = `${artist} - ${title}`;
+            else if (title) outputBase = title;
+            else outputBase = t.originalBase;
+
+            t.outputBase = sanitizeFileBaseName(stripLeadingTrackNumber(outputBase));
+            t.displayName = t.outputBase;
+            t.trackNo = hasTrackNo ? trackNo : null;
+            t.hasTrackNo = hasTrackNo;
+
+            if (!albumNameEl.value.trim() && album) albumNameEl.value = album;
+          } catch {
+            t.displayName = sanitizeFileBaseName(t.originalBase);
+            t.outputBase = sanitizeFileBaseName(t.originalBase);
+          }
+
+          sortTracksIfSafe();
+          scheduleRenderTrackList();
+        }
+      } finally {
+        clearTimeout(validatingToastTimer);
+        dismissToast(validatingToast);
+        isValidating = false;
       }
     } finally {
-      clearTimeout(validatingToastTimer);
-      dismissToast(validatingToast);
-      isValidating = false;
-      btnAddTracks.disabled = false;
-      btnNewAlbum.disabled = false;
+      audioDialogInFlight = false;
+      if (!isRendering && !isValidating) {
+        btnAddTracks.disabled = false;
+        btnNewAlbum.disabled = false;
+      }
     }
   }
 
   async function pickImage() {
-    const file = await window.api.selectImage();
-    if (!file) return;
+    if (isRendering || imageDialogInFlight) return;
+    imageDialogInFlight = true;
+    btnCover.disabled = true;
+    try {
+      const file = await window.api.selectImage();
+      if (!file) return;
 
-    imageFile = file;
-    const coverName = pathBasename(file);
-    coverLabel.textContent = coverName;
-    coverPreviewText.textContent = coverName;
+      imageFile = file;
+      const coverName = pathBasename(file);
+      coverLabel.textContent = coverName;
+      coverPreviewText.textContent = coverName;
 
-    coverImg.src = filePathToUrl(file);
-    coverImg.style.display = 'block';
-    coverPlaceholder.style.display = 'none';
+      coverImg.src = filePathToUrl(file);
+      coverImg.style.display = 'block';
+      coverPlaceholder.style.display = 'none';
+    } finally {
+      imageDialogInFlight = false;
+      if (!isRendering) btnCover.disabled = false;
+    }
   }
 
   async function chooseFolder() {
-    const folder = await window.api.selectFolder();
-    if (!folder) return;
-    exportFolder = folder;
-    exportLabel.textContent = folder;
+    if (isRendering || folderDialogInFlight) return;
+    folderDialogInFlight = true;
+    btnExport.disabled = true;
+    try {
+      const folder = await window.api.selectFolder();
+      if (!folder) return;
+      exportFolder = folder;
+      exportLabel.textContent = folder;
+    } finally {
+      folderDialogInFlight = false;
+      if (!isRendering) btnExport.disabled = false;
+    }
   }
 
   async function openOutputFolder() {
