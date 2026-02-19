@@ -303,6 +303,37 @@ function runRendererExportContractTest() {
     source.includes('progressTarget = Math.max(progressTarget, 0.99, progressDisplay);'),
     'Renderer export contract: finalizing should force target to >= 99%.'
   );
+  [
+    'id="btn-add"',
+    'id="btn-clear"',
+    'id="btn-art"',
+    'id="btn-folder"',
+    'id="btn-export"',
+    'id="btn-cancel"',
+    'id="btn-new"',
+    'id="select-preset"',
+    'id="chk-folder"',
+    'id="input-folder-name"',
+    'id="track-list"',
+    'id="tracks-body"',
+    'id="cover-img"',
+    'id="folder-path"',
+    'id="progress-wrap"',
+    'id="prog-fill"',
+    'id="prog-pct"',
+    'id="st-txt"',
+    'id="btn-open-folder"',
+    'id="btn-open-logs"',
+  ].forEach((selectorMarker) => {
+    assertOk(
+      source.includes(selectorMarker),
+      `Renderer export contract: expected renderer selector ${selectorMarker}.`
+    );
+  });
+  assertOk(
+    source.includes('window.__frenderTestHooks'),
+    'Renderer export contract: expected renderer test hooks for runtime layout assertions.'
+  );
   console.log('OK: renderer export contract uses explicit renderAlbum path with never-silent logs');
 }
 

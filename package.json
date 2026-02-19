@@ -14,15 +14,17 @@
     "dist:mac:arm64": "npm run verify:mac-bins && electron-builder --mac dmg zip --arm64 --publish never --config.directories.output=dist/mac-arm64 && npm run verify:packaged-bins -- --platform darwin --arch arm64 --root dist/mac-arm64 && npm run package:manifest -- --target dist/mac-arm64 --platform darwin --arch arm64 --out-dir dist/package/mac-arm64",
     "dist:mac:x64": "npm run verify:mac-bins && electron-builder --mac dmg zip --x64 --publish never --config.directories.output=dist/mac-x64 && npm run verify:packaged-bins -- --platform darwin --arch x64 --root dist/mac-x64 && npm run package:manifest -- --target dist/mac-x64 --platform darwin --arch x64 --out-dir dist/package/mac-x64",
     "dist:mac": "npm run dist:mac:arm64 && npm run dist:mac:x64",
-    "dist:win": "npm run verify:win-bins && electron-builder --win nsis portable --x64 --publish never && npm run verify:packaged-bins -- --platform win32 --arch x64",
+    "dist:win": "npm run verify:win-bins && electron-builder --win nsis portable --x64 --publish never && npm run verify:win-artifacts && npm run verify:packaged-bins -- --platform win32 --arch x64",
     "release:win": "npm run dist:win && npm run release:hash",
     "test:smoke": "node scripts/smoke-test.js",
-    "test:e2e": "node tests/e2e/render.test.js && node tests/e2e/hardening.test.js && node tests/e2e/diagnostics.test.js && node tests/e2e/perf-capture-parser.test.js && node tests/e2e/perf-baseline-contract.test.js && node tests/e2e/engine-fsm.test.js && node tests/e2e/binaries-contract.test.js && node tests/e2e/binary-integrity-airbag.test.js && node tests/e2e/job-ledger-recovery.test.js",
+    "test:e2e": "node tests/e2e/render.test.js && node tests/e2e/hardening.test.js && node tests/e2e/renderer-layout.test.js && node tests/e2e/diagnostics.test.js && node tests/e2e/perf-capture-parser.test.js && node tests/e2e/perf-baseline-contract.test.js && node tests/e2e/engine-fsm.test.js && node tests/e2e/binaries-contract.test.js && node tests/e2e/binary-integrity-airbag.test.js && node tests/e2e/job-ledger-recovery.test.js",
     "test": "npm run test:smoke && npm run test:e2e",
     "verify:win-bins": "node scripts/verify-win-binaries.js",
     "verify:packaged-bins": "node scripts/verify-packaged-binaries.js",
     "verify:invariants": "node scripts/verify-invariants.js",
-    "verify:all": "npm run test && npm run verify:win-bins && npm run verify:invariants",
+    "verify:win-artifacts": "node scripts/verify-win-artifacts.js",
+    "verify:build-config": "node scripts/verify-build-config.js",
+    "verify:all": "npm run test && npm run verify:win-bins && npm run verify:build-config && npm run verify:invariants",
     "perf:capture:mac": "node scripts/perf-capture-mac.js",
     "release:hash": "node scripts/release-sha256.js",
     "perf:run": "node scripts/perf-run.js",
@@ -47,7 +49,6 @@
     "appId": "com.cudellmediasystems.frender",
     "productName": "fRender",
     "asar": true,
-    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
     "afterPack": "scripts/electron-builder-after-pack.js",
     "directories": {
       "buildResources": "build-resources",
@@ -71,6 +72,7 @@
       "!node_modules/@ffmpeg-installer/**"
     ],
     "mac": {
+      "artifactName": "${productName}-${version}-mac-${arch}.${ext}",
       "icon": "build-resources/icon.icns",
       "category": "public.app-category.music",
       "extendInfo": {
@@ -176,9 +178,13 @@
       ]
     },
     "nsis": {
+      "artifactName": "${productName}-${version}-win-${arch}-setup.${ext}",
       "oneClick": false,
       "allowElevation": true,
       "allowToChangeInstallationDirectory": true
+    },
+    "portable": {
+      "artifactName": "${productName}-${version}-win-${arch}-portable.${ext}"
     }
   }
 }
