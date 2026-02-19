@@ -5,606 +5,799 @@
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: blob: file:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'; media-src 'self' file: blob:; object-src 'none'; base-uri 'self'; frame-ancestors 'none';" />
 <title>fRender – Album to Video</title>
 <style>
-  :root{
-    --bg:#0c0f14;
-    --panel:#121827;
-    --panel2:#0f1523;
-    --text:#eaf1ff;
-    --muted:#9aa8c4;
-    --accent:#5aa7ff;
-    --accentSoft:#8fc6ff;
-    --border:#24314a;
-    --danger:#ff6b6b;
-    --total:#7fb8ff;
-    --pagePad:20px;
-    --topbarGap:18px;
-    --azGap:16px;
-    --azTop:16px;
-    --azDividerGap:18px;
-    --bottomInset:20px;
-    --panelInset:24px;
-    --subSectionGap:clamp(12px, 1.8vh, 18px);
-    --settingsSectionGap:8px;
-    --settingsReleaseGap:12px;
-    --kvToActionGap:12px;
-    --settingsFooterPad:var(--panelInset);
-  }
-  *{ box-sizing:border-box; }
-  html, body{
-    height:100%;
-    margin:0;
-    overflow:hidden;
-  }
-  body{
-    padding:var(--pagePad);
-    font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
-    background: var(--bg);
-    color: var(--text);
-    overflow:hidden;
-  }
-  .topbar{
-    position:relative;
-    display:flex;
-    align-items:flex-start;
-    justify-content:space-between;
-    gap:13px;
-    margin-bottom:var(--topbarGap);
-    overflow:hidden;
-  }
-  .topbarMain,
-  .topActions{
-    position:relative;
-    z-index:1;
-  }
-  .brandLine{
-    display:flex;
-    align-items:center;
-    gap:8px;
-  }
-  .brandMarkMini{
-    width:16px;
-    height:16px;
-    flex:0 0 auto;
-    display:none;
-  }
-  .brandHeader-logo .brandMarkMini{ display:block; }
-  .topbarBrandBg{
-    position:absolute;
-    inset:0;
-    display:none;
-    align-items:center;
-    gap:10px;
-    padding-left:10px;
-    pointer-events:none;
-    opacity:0.08;
-    color:#8fc6ff;
-    font-size:18px;
-    font-weight:900;
-    letter-spacing:0.2px;
-  }
-  .brandHeader-bg .topbarBrandBg{ display:flex; }
-  .topbarBrandBg svg{
-    width:20px;
-    height:20px;
-    flex:0 0 auto;
-  }
-  .brandTag{ font-size:11px; color:var(--muted); font-weight:850; letter-spacing:0.2px; }
-  .title{ font-size:20px; font-weight:900; letter-spacing:0.2px; margin-top:3px; }
-  .subtitle{ font-size:13px; color:var(--muted); margin-top:6px; max-width:860px; line-height:1.35; }
-  .topActions{ display:flex; gap:13px; align-items:center; flex-wrap:wrap; }
-  .grid{
-    display:grid;
-    grid-template-columns: minmax(520px, 1.2fr) minmax(420px, 0.95fr);
-    gap:24px;
-    flex:1 1 auto;
-    min-width:0;
-    min-height:0;
-  }
-  .grid > *{
-    min-width:0;
-    min-height:0;
-  }
-  .grid > .card{
-    min-height:0;
-  }
-  .grid > .card:first-child{
-    display:flex;
-    flex-direction:column;
-    min-height:0;
-  }
-  .grid > .card:last-child{
-    display:flex;
-    flex-direction:column;
-    min-height:0;
-  }
-  .card{
-    background: linear-gradient(180deg, var(--panel), var(--panel2));
-    border:1px solid var(--border);
-    border-radius:14px;
-    padding:24px;
-    box-shadow: 0 14px 40px rgba(0,0,0,0.28);
-    min-width:0;
-  }
-  .card h3{
-    margin:0 0 13px 0;
-    font-size:13px;
-    color: var(--muted);
-    font-weight:800;
-    text-transform:uppercase;
-    letter-spacing:0.9px;
-  }
-  .row{ display:flex; gap:13px; flex-wrap:wrap; margin-top:13px; align-items:center; }
-  .row.first{ margin-top:0; }
+/*
+  Window: 1100 × 760 px — fixed, no resize.
+  φ = 1.618
 
-  .isHidden{ display:none !important; }
-  .actionRow{
-    flex-wrap:nowrap;
-    margin-top:var(--azTop);
-  }
-  .actionRow #btnOpenFolder{ margin-left:auto; }
-  #btnAddTracks{
-    min-width:128px;
-    min-height:42px;
-  }
-  button{
-    background: var(--accent);
-    color:#04111e;
-    border:0;
-    border-radius:11px;
-    padding:11px 15px;
-    font-weight:850;
-    cursor:pointer;
-    font-size:13px;
-  }
-  button.secondary{ background: transparent; color: var(--text); border:1px solid var(--border); }
-  button.danger{ background: transparent; color: var(--danger); border:1px solid rgba(255,107,107,0.35); }
-  button.primary{
-    background: linear-gradient(180deg, var(--accentSoft), var(--accent));
-    color:#02101e;
-    padding:13px 18px;
-    border-radius:12px;
-    font-size:14px;
-    letter-spacing:0.2px;
-    box-shadow: 0 10px 22px rgba(90,167,255,0.18);
-  }
-  .settingsCard .actionRow #renderBtn{
-    background: var(--accent);
-    color:#04111e;
-    min-width:128px;
-    min-height:40px;
-    border-radius:11px;
-    padding:10px 16px;
-    font-weight:850;
-    font-size:13px;
-    letter-spacing:0;
-    box-shadow:none;
-  }
-  button:disabled{ opacity:0.5; cursor:not-allowed; }
+  Key proportions:
+  ┌ Right panel width   = 1100 / (1 + φ) = 1100 / 2.618 ≈ 420px  → left = 680px
+  ├ Cover thumb height  = 420 / φ² = 420 / 2.618 ≈ 160px  → width = 160px (square)
+  ├ Folder row height   = 160 / φ  ≈ 99px
+  └ Titlebar height     = 44px (standard Electron macOS)
 
-  select, input[type="text"]{
-    background: transparent;
-    color: var(--text);
-    border:1px solid var(--border);
-    border-radius:10px;
-    padding:10px 12px;
-    font-weight:900;
-    font-size:13px;
-    outline:none;
-  }
-  select{
-    width:min(280px, 100%);
-    max-width:100%;
-    min-width:0;
-  }
-  option{ color:#000; }
+  Content height = 760 − 44 = 716px
+  Right panel vertical budget (716px):
+    Preset section   ≈ 140px
+    Cover+folder     = 160 + 1 + 99 = 260px
+    Summary          ≈ 96px   (716 − 140 − 260 − 220export = 96)
+    Export section   ≈ 220px
+    Total            = 716px ✓
+*/
 
-  /* Preset is an intention, not a form: keep it optically compact. */
-  .presetBlock{ max-width:280px; align-self:flex-start; }
-  .presetBlock #presetDescription{ max-width:280px; }
-  #presetDescription{
-    color: var(--muted);
-    font-size:12px;
-    line-height:1.25;
-    display:-webkit-box;
-    -webkit-line-clamp:2;
-    -webkit-box-orient:vertical;
-    overflow:hidden;
-  }
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-  .kv{
-    margin-top:12px;
-    display:grid;
-    grid-template-columns: 110px 1fr;
-    gap:8px 12px;
-    font-size:13px;
-    color: var(--muted);
-    align-items:center;
-    max-width:360px;
-  }
-  .kv .v{ color: var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+:root {
+  --bg:          #080b10;
+  --bg-panel:    #0c1018;
+  --bg-surf:     #111826;
+  --bg-surf2:    #161e2d;
+  --bg-hover:    #192033;
+  --bg-input:    #0e1520;
 
-  .list{
-    margin:13px 0 0 0;
-    padding:0;
-    list-style:none;
-    flex:1 1 auto;
-    min-height:0;
-    overflow-y:auto;
-    overflow-x:hidden;
-    border:1px solid var(--border);
-    border-radius:12px;
-    scrollbar-gutter: stable both-edges;
-  }
-  .tracksInner{ padding-bottom:var(--panelInset); }
-  .list li{
-    display:grid;
-    grid-template-columns: 1fr 28px;
-    align-items:center;
-    gap:13px;
-    padding:10px 13px;
-    border-bottom:1px solid rgba(255,255,255,0.06);
-    font-size:13px;
-  }
-  .list li:last-child{ border-bottom:0; }
+  --line:        rgba(255,255,255,0.068);
+  --line-md:     rgba(255,255,255,0.11);
+  --line-lg:     rgba(255,255,255,0.18);
 
-  .trackText{ min-width:0; }
-  .trackMain{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:900; }
-  .trackSub{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color: var(--muted); font-size:12px; margin-top:2px; }
+  --t1: #e0e8f5;
+  --t2: #7c8da8;
+  --t3: #475060;
+  --t4: #2a3448;
 
-  .removeBtn{
-    width:28px; height:28px;
-    border-radius:8px;
-    border:1px solid rgba(255,255,255,0.10);
-    background: rgba(255,255,255,0.03);
-    color: rgba(255,255,255,0.82);
-    display:flex; align-items:center; justify-content:center;
-    cursor:pointer;
-    user-select:none;
-  }
-  .removeBtn:hover{
-    border-color: rgba(255,107,107,0.4);
-    color: var(--danger);
-    background: rgba(255,107,107,0.08);
-  }
-  .removeBtn.disabled{
-    opacity:0.4;
-    cursor:not-allowed;
-    pointer-events:none;
-  }
+  --accent:   #3d86f5;
+  --accent-d: rgba(61,134,245,0.10);
+  --green:    #2cc886;
+  --green-d:  rgba(44,200,134,0.10);
+  --danger:   #e05050;
+  --danger-d: rgba(224,80,80,0.12);
 
-  .inline{ display:flex; align-items:center; gap:13px; flex-wrap:wrap; margin-top:13px; }
-  .inline label{ display:flex; align-items:center; gap:8px; color: var(--muted); font-size:13px; font-weight:850; }
-  .inline input[type="checkbox"]{ transform: scale(1.05); }
-  #releaseFolderSection{
-    min-width:240px;
-    min-height:42px;
-    display:flex;
-    align-items:center;
-  }
-  #releaseFolderSection.dimmed{
-    opacity:0.55;
-  }
-  #releaseFolderSection.dimmed input{
-    pointer-events:none;
-  }
+  --r1: 4px;  --r2: 6px;  --r3: 9px;  --r4: 13px;
 
-  .coverPreviewRow{
-    display:inline-flex;
-    align-items:center;
-    gap:12px;
-    margin-top:12px;
-    padding:12px;
-    border:1px solid rgba(255,255,255,0.08);
-    border-radius:12px;
-    background: rgba(255,255,255,0.02);
-    width:auto;
-    max-width:320px;
-    align-self:flex-start;
-  }
-  .coverPreview{
-    width:88px; height:88px;
-    border-radius:14px;
-    border:1px solid rgba(255,255,255,0.10);
-    background: rgba(255,255,255,0.03);
-    overflow:hidden;
-    display:flex; align-items:center; justify-content:center;
-    flex: 0 0 auto;
-    position:relative;
-  }
-  .coverPreview img{ width:100%; height:100%; object-fit: cover; display:none; }
-  .coverPlaceholder{
-    color: var(--muted);
-    font-weight:800;
-    font-size:11px;
-    letter-spacing:0.2px;
-    text-align:center;
-    padding:0;
-    line-height:1.2;
-    cursor:pointer;
-    position:absolute;
-    top:50%;
-    left:50%;
-    transform: translate(-50%, -50%);
-    width:100%;
-  }
-  .coverMeta{ min-width:0; flex: 0 1 auto; }
-  /* Keep the label/text optically grouped, without turning into another “panel”. */
-  .coverMetaBox{
-    border:1px solid rgba(255,255,255,0.07);
-    background: rgba(255,255,255,0.018);
-    border-radius:10px;
-    padding:10px 10px;
-    max-width:200px;
-    min-width:0;
-  }
-  .coverMetaTitle{ font-weight:950; font-size:13px; margin-bottom:4px; }
-  .coverMetaSub{ color: var(--muted); font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  --f:  -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable", "Segoe UI", sans-serif;
+  --fm: "SF Mono", "Menlo", "Cascadia Code", "Consolas", monospace;
 
-  .progressWrap{
-    border-top:1px solid rgba(255,255,255,0.08);
-    padding-top:12px;
-  }
-  .progressTitle{ font-size:13px; color: var(--muted); margin-bottom:8px; }
-  .bar{ position:relative; height:18px; background: rgba(255,255,255,0.09); border-radius:999px; overflow:hidden; width:100%; }
-  .fill{ height:100%; width:0%; background: var(--accent); border-radius:999px; transition: width 450ms cubic-bezier(0.22, 1, 0.36, 1); }
-  .fill.total{ background: var(--total); opacity:0.9; }
-  .barText{ position:absolute; inset:0; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:950; color: rgba(234,241,255,0.92); letter-spacing:0.2px; text-shadow: 0 1px 10px rgba(0,0,0,0.55); pointer-events:none; }
-  #trackTitle{ display:none; }
-  .statusLine{ margin:0 0 8px 0; font-size:13px; color: var(--muted); line-height:1.35; }
-  /* Reserve space so "Output folder" never crushes the progress area in fixed window. */
-  .openRow{
-    margin-top:10px;
-    display:flex;
-    align-items:center;
-    gap:10px;
-    min-height:44px;
-  }
-  .openRow.hidden{ display:none; }
-  .appShell{
-    position:relative;
-    height:100%;
-    display:flex;
-    flex-direction:column;
-    min-height:0;
-    min-width:0;
-    overflow:hidden;
-  }
-  .locked .card{
-    opacity:0.78;
-    filter: saturate(0.92);
-  }
-  .toastWrap{
-    position:fixed;
-    right:18px;
-    bottom:18px;
-    display:flex;
-    flex-direction:column;
-    gap:8px;
-    z-index:30;
-    pointer-events:none;
-  }
-  .toast{
-    background: rgba(15,21,35,0.94);
-    border:1px solid var(--border);
-    color: var(--text);
-    padding:10px 12px;
-    border-radius:10px;
-    font-size:12px;
-    font-weight:700;
-    letter-spacing:0.2px;
-    box-shadow: 0 8px 20px rgba(0,0,0,0.35);
-    opacity:0;
-    transform: translateY(6px);
-    transition: opacity 0.18s ease, transform 0.18s ease;
-  }
-  .toast.show{ opacity:1; transform: translateY(0); }
-  .toast.warn{ border-color: rgba(255,107,107,0.35); color: var(--danger); }
-  .toast.info{ border-color: rgba(90,167,255,0.35); color: var(--accentSoft); }
+  --content-h: calc(100vh - 44px);
+  --preset-h: calc(var(--content-h) * 0.19553);   /* 140 / 716 */
+  --cover-h: calc(var(--content-h) * 0.22346);    /* 160 / 716 */
+  --folder-h: calc(var(--content-h) * 0.13827);   /* 99 / 716 */
+  --summary-h: calc(var(--content-h) * 0.13408);  /* 96 / 716 */
+}
 
-  /* --- Settings panel optical balance (UI-only, fixed-window safe) --- */
-  .settingsCard{
-    padding:24px 24px var(--settingsFooterPad);
-    display:flex;
-    flex-direction:column;
-    min-height:0;
-    overflow:hidden;
-  }
-  .settingsCard .row{ margin-top:10px; }
-  .settingsCard .row.first{ margin-top:0; }
-  .settingsCard .subSection{ margin-top:var(--subSectionGap); }
-  .settingsCard .inline{ margin-top:10px; gap:12px; }
-  .settingsCard .settingsGroup{
-    margin-top:0;
-    min-width:0;
-  }
-  .settingsCard .settingsGroup.first{ margin-top:0; }
-  .settingsCard .settingsGroup + .settingsGroup{ margin-top:var(--settingsSectionGap); }
-  .settingsCard .settingsGroup + .settingsGroup.footerGroup{ margin-top:calc(var(--settingsSectionGap) * 2); }
-  .settingsCard .settingsGroup.first + .settingsGroup{ margin-top:var(--settingsReleaseGap); }
-  .settingsCard .settingsGroup.releaseGroup + .settingsGroup{ margin-top:var(--settingsReleaseGap); }
-  .settingsCard .settingsGroup .inline{ margin-top:0; }
-  .settingsCard .releaseRow{
-    width:min(520px, 100%);
-    margin:0 auto;
-    display:flex;
-    align-items:center;
-    justify-content:space-between;
-    gap:12px;
-  }
-  .settingsCard .releaseRow > label{ margin:0; }
-  .settingsCard .coverPreviewRow{ margin-top:var(--settingsSectionGap); }
-  .settingsCard .kv{
-    margin-top:calc(var(--subSectionGap) - 2px);
-    margin-bottom:var(--kvToActionGap);
-  }
-  .settingsCard .settingsGroup .kv{ margin-top:0; }
-  .settingsCard .actionRow{ margin-top:6px; }
-  .settingsCard .actionRow > button{
-    min-height:40px;
-    padding:10px 16px;
-  }
-  .settingsCard select{ width:min(240px, 100%); }
-  .settingsCard #releaseFolderSection{ min-width:0; }
-  .settingsCard #albumName{ width:210px; }
-  .settingsCard .actionZone{
-    margin-top:0;
-    gap:12px;
-  }
-  .settingsCard .footerGroup{
-    display:flex;
-    flex-direction:column;
-    flex:1 1 auto;
-    min-height:0;
-  }
-  .settingsCard .footerGroup .actionZone{
-    display:flex;
-    flex-direction:column;
-    flex:1 1 auto;
-    min-height:0;
-  }
-  .settingsCard .footerGroup .progressWrap{ margin-top:auto; }
-  .settingsCard .actionZone{ padding-bottom:0; }
-  .settingsCard .progressWrap{
-    border-top:1px solid rgba(255,255,255,0.08);
-    padding-top:12px;
-    padding-bottom:0;
-  }
-  .settingsCard .actionZone .progressWrap{ margin-top:0; }
-  .settingsCard .statusLine{ margin:0 0 6px 0; }
+html, body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  font-family: var(--f);
+  font-size: 13px;
+  background: var(--bg);
+  color: var(--t1);
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
 
-  .actionZone{
-    margin-top:var(--subSectionGap);
-    display:flex;
-    flex-direction:column;
-    gap:var(--azGap);
-  }
-  .actionZone .progressWrap{ margin-top:0; }
+button,
+select,
+input {
+  font-family: inherit;
+}
 
+.app { display: flex; flex-direction: column; width: 100%; height: 100%; }
+
+.tb {
+  height: 44px;
+  flex-shrink: 0;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  padding: 0 16px 0 80px;
+  gap: 10px;
+  -webkit-app-region: drag;
+}
+.tb-mark {
+  width: 22px;
+  height: 22px;
+  background: var(--bg-surf2);
+  border: 1px solid var(--line-md);
+  border-radius: 5px;
+  display: grid;
+  place-items: center;
+  font-family: var(--fm);
+  font-size: 9px;
+  font-weight: 700;
+  color: #5a9bf7;
+  flex-shrink: 0;
+}
+.tb-name { font-size: 12px; font-weight: 600; color: var(--t1); }
+.tb-sep  { font-size: 11px; color: var(--t4); }
+.tb-sub  { font-size: 11px; color: var(--t3); }
+.tb-desc { font-size: 10px; color: var(--t4); margin-left: 4px; }
+.tb-gap  { flex: 1; }
+.tb-btn {
+  -webkit-app-region: no-drag;
+  height: 28px;
+  padding: 0 12px;
+  background: var(--bg-surf);
+  border: 1px solid var(--line-md);
+  border-radius: var(--r2);
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--t2);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  transition: background .12s, color .12s, border-color .12s;
+}
+.tb-btn:hover { background: var(--bg-hover); color: var(--t1); border-color: var(--line-lg); }
+
+.main {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.left {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--line);
+  background: var(--bg-panel);
+  overflow: hidden;
+  min-height: 0;
+}
+
+.right {
+  width: 420px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-panel);
+  overflow: hidden;
+}
+
+.sec-hd {
+  height: 40px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  padding: 0 20px;
+  gap: 10px;
+  border-bottom: 1px solid var(--line);
+}
+.sec-lbl {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--t3);
+  flex: 1;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  height: 28px;
+  padding: 0 12px;
+  border-radius: var(--r2);
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: opacity .12s, background .12s, border-color .12s, transform .08s;
+  white-space: nowrap;
+}
+.btn:active { transform: scale(.97); }
+.btn-a { background: var(--accent); color: #fff; }
+.btn-a:hover { opacity: .86; }
+.btn-a:disabled { opacity: .3; cursor: not-allowed; transform: none; }
+.btn-g { background: transparent; border-color: var(--line-md); color: var(--t2); }
+.btn-g:hover { background: var(--bg-hover); color: var(--t1); border-color: var(--line-lg); }
+.btn-d { background: var(--danger-d); border-color: rgba(224,80,80,.2); color: var(--danger); }
+.btn-d:hover { background: rgba(224,80,80,.18); border-color: rgba(224,80,80,.32); }
+.btn-d:disabled { opacity: .3; cursor: not-allowed; transform: none; }
+.btn-sm { height: 26px; font-size: 11.5px; padding: 0 10px; }
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 16px;
+  padding: 0 5px;
+  border-radius: 8px;
+  font-size: 10px;
+  font-weight: 600;
+  font-family: var(--fm);
+  background: var(--bg-surf2);
+  color: var(--t3);
+  border: 1px solid var(--line);
+}
+.badge.on { background: var(--accent-d); color: var(--accent); border-color: rgba(61,134,245,.22); }
+
+.tracks-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+.tracks-body::-webkit-scrollbar { width: 3px; }
+.tracks-body::-webkit-scrollbar-thumb { background: var(--line-md); border-radius: 2px; }
+
+#track-list { min-height: 100%; }
+
+.t-empty {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  opacity: .4;
+}
+.t-empty-icon {
+  width: 36px;
+  height: 36px;
+  border: 1.5px dashed var(--line-lg);
+  border-radius: var(--r3);
+  display: grid;
+  place-items: center;
+  color: var(--t3);
+}
+.t-empty-txt { font-size: 11.5px; color: var(--t3); text-align: center; line-height: 1.6; }
+
+.t-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 20px;
+  border-bottom: 1px solid var(--line);
+  transition: background .1s;
+}
+.t-row:hover { background: var(--bg-hover); }
+.t-no {
+  font-family: var(--fm);
+  font-size: 10px;
+  color: var(--t4);
+  width: 18px;
+  text-align: right;
+  flex-shrink: 0;
+}
+.t-info { flex: 1; min-width: 0; }
+.t-name {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--t1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.t-meta {
+  font-size: 10px;
+  color: var(--t3);
+  margin-top: 2px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.t-meta span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.t-sep { width: 2px; height: 2px; border-radius: 50%; background: var(--t4); flex-shrink: 0; }
+.t-st {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  display: grid;
+  place-items: center;
+  color: var(--t4);
+  font-size: 10px;
+}
+.t-rm {
+  width: 18px;
+  height: 18px;
+  border-radius: 3px;
+  border: none;
+  background: transparent;
+  color: var(--t3);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  opacity: 0;
+  flex-shrink: 0;
+  transition: opacity .12s, background .12s, color .12s;
+}
+.t-row:hover .t-rm { opacity: 1; }
+.t-rm:hover { background: var(--danger-d); color: var(--danger); }
+.t-rm:disabled,
+.t-row:hover .t-rm:disabled {
+  opacity: .35;
+  cursor: not-allowed;
+  color: var(--t4);
+  background: transparent;
+}
+
+.r-sec { padding: 14px 20px; border-bottom: 1px solid var(--line); flex-shrink: 0; height: var(--preset-h); }
+
+.sec-mini {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--t3);
+  margin-bottom: 10px;
+}
+
+.sel-w { position: relative; margin-bottom: 8px; }
+.sel-w select {
+  width: 100%;
+  appearance: none;
+  background: var(--bg-input);
+  border: 1px solid var(--line-md);
+  border-radius: var(--r2);
+  color: var(--t1);
+  font-size: 12px;
+  font-weight: 500;
+  padding: 0 26px 0 10px;
+  height: 28px;
+  cursor: pointer;
+}
+.sel-w select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-d); }
+.sel-w::after {
+  content: '';
+  position: absolute;
+  right: 9px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 7px;
+  height: 4px;
+  clip-path: polygon(0 0, 100% 0, 50% 100%);
+  background: var(--t3);
+  pointer-events: none;
+}
+.sel-desc {
+  font-size: 10.5px;
+  color: var(--t3);
+  line-height: 1.5;
+  min-height: 30px;
+  margin-bottom: 10px;
+}
+
+.chk-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.chk-row input[type=checkbox] { width: 13px; height: 13px; accent-color: var(--accent); cursor: pointer; flex-shrink: 0; }
+.chk-row label { font-size: 11.5px; font-weight: 500; color: var(--t2); cursor: pointer; flex: 1; }
+
+#release-folder-section.dimmed {
+  opacity: .55;
+}
+#release-folder-section.dimmed .txt-in {
+  pointer-events: none;
+}
+
+.txt-in {
+  width: 100%;
+  background: var(--bg-input);
+  border: 1px solid var(--line-md);
+  border-radius: var(--r2);
+  color: var(--t1);
+  font-size: 12px;
+  padding: 0 10px;
+  height: 28px;
+}
+.txt-in::placeholder { color: var(--t3); }
+.txt-in:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-d); }
+
+.cover-block { flex-shrink: 0; border-bottom: 1px solid var(--line); }
+.cover-row { display: flex; height: var(--cover-h); }
+
+.cover-thumb {
+  width: var(--cover-h);
+  flex-shrink: 0;
+  background: var(--bg-surf2);
+  border-right: 1px solid var(--line);
+  position: relative;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+}
+.cover-thumb img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: none;
+}
+.cover-ph {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+  opacity: .28;
+}
+.cover-ph span { font-size: 9px; color: var(--t3); letter-spacing: .04em; }
+
+.cover-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 0 16px;
+  gap: 4px;
+  min-width: 0;
+}
+.cover-fname {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--t1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cover-fname.empty { color: var(--t3); font-weight: 400; }
+.cover-fdims { font-size: 10px; font-family: var(--fm); color: var(--t3); margin-bottom: 10px; }
+
+.cover-art-btn {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  font-weight: 500;
+  height: 26px;
+  padding: 0 11px;
+  border-radius: var(--r2);
+  border: 1px solid var(--line-md);
+  background: transparent;
+  color: var(--t2);
+  cursor: pointer;
+  transition: background .12s, color .12s, border-color .12s;
+}
+.cover-art-btn:hover { background: var(--bg-hover); color: var(--t1); border-color: var(--line-lg); }
+
+.folder-row { display: flex; height: var(--folder-h); border-top: 1px solid var(--line); }
+
+.folder-thumb-col {
+  width: var(--cover-h);
+  flex-shrink: 0;
+  border-right: 1px solid var(--line);
+  display: grid;
+  place-items: center;
+  color: var(--t4);
+}
+
+.folder-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 0 16px;
+  gap: 6px;
+  min-width: 0;
+}
+.folder-label-txt {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--t3);
+}
+.folder-path-txt {
+  font-size: 11.5px;
+  color: var(--t2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.folder-path-txt.empty { color: var(--t3); }
+.folder-path-txt.ok    { color: var(--green); }
+
+.folder-browse-btn {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  font-weight: 500;
+  height: 26px;
+  padding: 0 11px;
+  border-radius: var(--r2);
+  border: 1px solid var(--line-md);
+  background: transparent;
+  color: var(--t2);
+  cursor: pointer;
+  transition: background .12s, color .12s, border-color .12s;
+}
+.folder-browse-btn:hover { background: var(--bg-hover); color: var(--t1); border-color: var(--line-lg); }
+
+.r-summary { padding: 12px 20px; border-bottom: 1px solid var(--line); flex-shrink: 0; height: var(--summary-h); }
+.sum-grid { display: grid; grid-template-columns: auto 1fr; gap: 0; }
+.sk { padding: 3.5px 10px 3.5px 0; font-size: 11px; color: var(--t3); }
+.sv {
+  padding: 3.5px 0;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--t2);
+  text-align: right;
+  font-family: var(--fm);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sv.dim { color: var(--t3); font-family: var(--f); font-weight: 400; }
+.sv.ok  { color: var(--green); }
+
+.export-sec {
+  flex: 1;
+  min-height: 0;
+  border-top: 1px solid var(--line);
+  padding: 20px 20px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.export-btns { display: flex; gap: 8px; }
+
+.btn-export {
+  flex: 1;
+  justify-content: center;
+  height: 36px;
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: var(--r3);
+}
+.btn-cancel {
+  flex: 1;
+  justify-content: center;
+  height: 36px;
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: var(--r3);
+  max-width: 96px;
+}
+
+.prog-wrap { display: flex; flex-direction: column; gap: 8px; }
+.prog-meta { display: flex; align-items: baseline; justify-content: space-between; }
+.prog-lbl {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .09em;
+  text-transform: uppercase;
+  color: var(--t3);
+}
+.prog-pct {
+  font-family: var(--fm);
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--t2);
+  letter-spacing: -.02em;
+}
+.prog-track {
+  width: 100%;
+  height: 24px;
+  background: var(--bg-surf2);
+  border-radius: var(--r2);
+  border: 1px solid var(--line);
+  overflow: hidden;
+  position: relative;
+}
+.prog-fill {
+  height: 100%;
+  border-radius: var(--r2);
+  background: var(--accent);
+  transition: width .35s ease;
+  position: relative;
+}
+.prog-fill::after {
+  content: '';
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 80px;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,.15));
+  animation: sh 1.6s ease-in-out infinite;
+}
+@keyframes sh { 0%,100%{opacity:0} 50%{opacity:1} }
+.prog-fill.done { background: var(--green); }
+.prog-fill.done::after, .prog-fill.idle::after { display: none; }
+.prog-fill.idle { transition: none; }
+
+.st-line { display: flex; align-items: center; gap: 6px; min-height: 14px; }
+.st-dot  { width: 5px; height: 5px; border-radius: 50%; background: var(--t4); flex-shrink: 0; }
+.st-dot.active { background: var(--accent); box-shadow: 0 0 5px var(--accent); animation: bl 1.2s ease-in-out infinite; }
+.st-dot.done   { background: var(--green); box-shadow: none; animation: none; }
+@keyframes bl  { 0%,100%{opacity:1} 50%{opacity:.3} }
+.st-txt { font-size: 10.5px; color: var(--t3); }
+
+.open-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.is-hidden { display: none !important; }
+
+#track-title {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+
+.toast-wrap {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 30;
+  pointer-events: none;
+}
+.toast {
+  background: rgba(15,21,35,0.94);
+  border: 1px solid var(--line-md);
+  color: var(--t1);
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .2px;
+  box-shadow: 0 8px 20px rgba(0,0,0,.35);
+  opacity: 0;
+  transform: translateY(6px);
+  transition: opacity .18s ease, transform .18s ease;
+}
+.toast.show { opacity: 1; transform: translateY(0); }
+.toast.warn { border-color: rgba(255,107,107,.35); color: var(--danger); }
+.toast.info { border-color: rgba(61,134,245,.45); color: #8fc6ff; }
 </style>
 </head>
 <body>
-
-<div class="appShell">
-<div class="topbar">
-  <div class="topbarBrandBg" aria-hidden="true">
-    <svg viewBox="0 0 1000 1000" aria-hidden="true">
-      <rect x="84" y="84" width="832" height="832" rx="160" fill="none" stroke="#8fc6ff" stroke-width="64"/>
-      <rect x="256" y="378" width="72" height="244" rx="36" fill="#8fc6ff"/>
-      <rect x="360" y="288" width="72" height="424" rx="36" fill="#8fc6ff"/>
-      <rect x="464" y="230" width="72" height="540" rx="36" fill="#8fc6ff"/>
-      <rect x="568" y="288" width="72" height="424" rx="36" fill="#8fc6ff"/>
-      <rect x="672" y="378" width="72" height="244" rx="36" fill="#8fc6ff"/>
-    </svg>
-    <span>fRender</span>
-  </div>
-  <div class="topbarMain">
-    <div class="brandLine">
-      <svg class="brandMarkMini" viewBox="0 0 1000 1000" aria-hidden="true">
-        <rect x="84" y="84" width="832" height="832" rx="160" fill="none" stroke="#5aa7ff" stroke-width="64"/>
-        <rect x="256" y="378" width="72" height="244" rx="36" fill="#5aa7ff"/>
-        <rect x="360" y="288" width="72" height="424" rx="36" fill="#5aa7ff"/>
-        <rect x="464" y="230" width="72" height="540" rx="36" fill="#5aa7ff"/>
-        <rect x="568" y="288" width="72" height="424" rx="36" fill="#5aa7ff"/>
-        <rect x="672" y="378" width="72" height="244" rx="36" fill="#5aa7ff"/>
-      </svg>
-      <div class="brandTag">fRender</div>
-    </div>
-    <div class="title">Album to Video</div>
-    <div class="subtitle">Convert audio to clean MP4 exports. One image. No surprises.</div>
-  </div>
-  <div class="topActions">
-    <button class="secondary" id="btnNewAlbum">New</button>
-  </div>
-</div>
-
-<div class="grid">
-  <div class="card">
-    <h3>Tracks</h3>
-
-    <div class="row first">
-      <button id="btnAddTracks">Add Audio Files</button>
-      <button class="danger" id="btnClearTracks">Clear</button>
-    </div>
-
-    <ul class="list tracksInner" id="audioList"></ul>
+<div class="app">
+  <div class="tb">
+    <div class="tb-mark">f</div>
+    <span class="tb-name">fRender</span>
+    <span class="tb-sep">—</span>
+    <span class="tb-sub">Album to Video</span>
+    <span class="tb-desc">· Convert audio to clean MP4 exports. One image. No surprises.</span>
+    <div class="tb-gap"></div>
+    <button class="tb-btn" id="btn-new" type="button">
+      <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M5 1v8M1 5h8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+      New
+    </button>
   </div>
 
-  <div class="card settingsCard">
-    <h3>Settings</h3>
-
-    <div class="settingsGroup first">
-      <div class="row first">
-        <label class="presetBlock" style="display:flex; flex-direction:column; gap:6px;">
-          <span style="color:var(--muted); font-weight:850; font-size:12px;">Preset</span>
-          <select id="presetSelect"></select>
-          <span id="presetDescription"></span>
-        </label>
-      </div>
-    </div>
-
-    <div class="settingsGroup releaseGroup">
-      <div class="inline releaseRow">
-        <label><input type="checkbox" id="createAlbumFolder" checked /> Create release folder</label>
-        <div id="releaseFolderSection">
-          <input type="text" id="albumName" placeholder="Release name" />
+  <div class="main">
+    <div class="left">
+      <div class="sec-hd">
+        <span class="sec-lbl">Tracks</span>
+        <span class="badge" id="track-badge">0</span>
+        <div style="display:flex;gap:6px;margin-left:8px;">
+          <button class="btn btn-a btn-sm" id="btn-add" type="button">
+            <svg width="9" height="9" viewBox="0 0 9 9" fill="none"><path d="M4.5 1v7M1 4.5h7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+            Add Files
+          </button>
+          <button class="btn btn-g btn-sm" id="btn-clear" type="button" disabled>Clear</button>
         </div>
       </div>
+      <div class="tracks-body" id="tracks-body">
+        <div class="t-empty" id="tracks-empty">
+          <div class="t-empty-icon">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 2v12M2 8h12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+          </div>
+          <p class="t-empty-txt">No tracks added.<br>Click Add Files to begin.</p>
+        </div>
+        <div id="track-list" aria-live="polite"></div>
+      </div>
     </div>
 
-    <div class="settingsGroup">
-      <div class="row first">
-        <button class="secondary" id="btnCover">Choose cover art</button>
-        <button class="secondary" id="btnExport">Choose export folder</button>
+    <div class="right">
+      <div class="r-sec">
+        <div class="sec-mini">Preset</div>
+        <div class="sel-w">
+          <select id="select-preset" aria-label="Export preset"></select>
+        </div>
+        <p class="sel-desc" id="preset-desc"></p>
+        <div class="chk-row">
+          <input type="checkbox" id="chk-folder" checked />
+          <label for="chk-folder">Create release folder</label>
+        </div>
+        <div id="release-folder-section">
+          <input class="txt-in" type="text" placeholder="Release name" id="input-folder-name" />
+        </div>
       </div>
 
-      <div class="coverPreviewRow">
-        <div class="coverPreview">
-          <img id="coverImg" alt="Cover art" />
-          <div class="coverPlaceholder" id="coverPlaceholder">No cover art</div>
+      <div class="cover-block">
+        <div class="cover-row">
+          <div class="cover-thumb" id="cover-thumb">
+            <img id="cover-img" alt="Cover art" />
+            <div class="cover-ph" id="cover-ph">
+              <svg width="22" height="22" viewBox="0 0 22 22" fill="none">
+                <rect x="1.5" y="1.5" width="19" height="19" rx="3.5" stroke="currentColor" stroke-width="1.3"/>
+                <circle cx="7.5" cy="7.5" r="2.2" fill="currentColor"/>
+                <path d="M1.5 15.5l5-5.5 4 4 3.5-3.5L21 16" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+              <span>No image</span>
+            </div>
+          </div>
+          <div class="cover-info">
+            <div class="cover-fname empty" id="cover-fname">Not selected</div>
+            <div class="cover-fdims" id="cover-fdims">JPG · PNG · WebP</div>
+            <button class="cover-art-btn" id="btn-art" type="button">
+              <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><rect x=".5" y=".5" width="9" height="9" rx="1.5" stroke="currentColor" stroke-width=".9"/><circle cx="3.2" cy="3.2" r=".9" fill="currentColor" opacity=".7"/><path d="M.5 7L3 4.5l2 2L6.5 5 9.5 8" stroke="currentColor" stroke-width=".9" stroke-linecap="round" stroke-linejoin="round" opacity=".7"/></svg>
+              <span id="art-btn-lbl">Choose cover art</span>
+            </button>
+          </div>
         </div>
-        <div class="coverMeta">
-          <div class="coverMetaBox">
-            <div class="coverMetaTitle">Cover art</div>
-            <div class="coverMetaSub" id="coverPreviewText">No cover art</div>
+
+        <div class="folder-row">
+          <div class="folder-thumb-col">
+            <svg width="20" height="18" viewBox="0 0 20 18" fill="none">
+              <path d="M1 6h18M1 6v9.25A.75.75 0 001.75 16h16.5a.75.75 0 00.75-.75V7a.75.75 0 00-.75-.75H9.5L7.5 4H2A1 1 0 001 5v1z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
+            </svg>
+          </div>
+          <div class="folder-info">
+            <div class="folder-label-txt">Export folder</div>
+            <div class="folder-path-txt empty" id="folder-path">Not selected</div>
+            <button class="folder-browse-btn" id="btn-folder" type="button">
+              <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M1 3.5h8M1 3.5V7.5a.5.5 0 00.5.5h7a.5.5 0 00.5-.5V4a.5.5 0 00-.5-.5H4.5L3.5 2H1.5a.5.5 0 00-.5.5v1z" stroke="currentColor" stroke-width="1" stroke-linejoin="round"/></svg>
+              Browse
+            </button>
           </div>
         </div>
       </div>
-    </div>
 
-    <div class="settingsGroup footerGroup">
-      <div class="kv">
-        <div>Cover art:</div><div class="v" id="coverLabel">Not selected</div>
-        <div>Export:</div><div class="v" id="exportLabel">Not selected</div>
-        <div>Tracks:</div><div class="v" id="countLabel">0</div>
-      </div>
-
-      <div class="actionZone">
-
-      <div class="row actionRow">
-        <button id="renderBtn" class="primary">Export</button>
-        <button id="cancelBtn" class="danger" disabled>Cancel</button>
-        <button class="secondary isHidden" id="btnOpenFolder">Output folder</button>
-      </div>
-
-      <div class="progressWrap" id="progressWrap">
-        <div class="statusLine" id="statusLine">Ready</div>
-        <div class="progressTitle" id="trackTitle">Track —</div>
-        <div class="bar"><div class="fill total" id="totalFill"></div><div class="barText" id="overallPercent">0%</div></div>
-        <div class="openRow hidden" id="logsRow">
-          <button class="secondary" id="btnOpenLogs">Ver logs</button>
+      <div class="r-summary">
+        <div class="sec-mini">Summary</div>
+        <div class="sum-grid">
+          <span class="sk">Cover art</span>  <span class="sv dim" id="info-cover">Not selected</span>
+          <span class="sk">Export to</span>  <span class="sv dim" id="info-folder">Not selected</span>
+          <span class="sk">Tracks</span>     <span class="sv" id="info-tracks">0</span>
+          <span class="sk">Duration</span>   <span class="sv dim" id="info-duration">—</span>
         </div>
       </div>
 
+      <div class="export-sec">
+        <div class="export-btns">
+          <button class="btn btn-a btn-export" id="btn-export" type="button" disabled>
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 1v8M3 7l3 3 3-3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M1 11h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+            Export
+          </button>
+          <button class="btn btn-d btn-cancel" id="btn-cancel" type="button" disabled>Cancel</button>
+        </div>
+
+        <div class="prog-wrap" id="progress-wrap">
+          <div class="prog-meta">
+            <span class="prog-lbl" id="prog-label">Ready</span>
+            <span class="prog-pct" id="prog-pct">0%</span>
+          </div>
+          <div class="prog-track">
+            <div class="prog-fill idle" id="prog-fill" style="width:0%"></div>
+          </div>
+          <div class="st-line">
+            <div class="st-dot" id="st-dot"></div>
+            <span class="st-txt" id="st-txt">Add tracks and a cover image to begin.</span>
+          </div>
+          <div class="open-actions is-hidden" id="open-actions">
+            <button class="btn btn-g btn-sm" id="btn-open-folder" type="button">Output folder</button>
+            <button class="btn btn-g btn-sm is-hidden" id="btn-open-logs" type="button">View logs</button>
+          </div>
+          <span id="track-title">Track —</span>
+        </div>
       </div>
     </div>
-
-  </div>
-
   </div>
 </div>
-</div>
-</div>
-<div class="toastWrap" id="toastWrap"></div>
+<div class="toast-wrap" id="toast-wrap"></div>
 
 <script>
   function emitPerfMark(mark) {
@@ -640,50 +833,53 @@
     });
   } catch {}
 
-  // Header branding variants: 'off' | 'logo' | 'bg'
-  const BRAND_HEADER_VARIANT = 'logo';
-  try {
-    document.body.classList.toggle('brandHeader-logo', BRAND_HEADER_VARIANT === 'logo');
-    document.body.classList.toggle('brandHeader-bg', BRAND_HEADER_VARIANT === 'bg');
-  } catch {}
+  const tracksBody = document.getElementById('tracks-body');
+  const tracksEmpty = document.getElementById('tracks-empty');
+  const trackList = document.getElementById('track-list');
+  const trackBadge = document.getElementById('track-badge');
 
-  const audioList = document.getElementById('audioList');
-  const coverLabel = document.getElementById('coverLabel');
-  const exportLabel = document.getElementById('exportLabel');
-  const countLabel = document.getElementById('countLabel');
+  const coverLabel = document.getElementById('info-cover');
+  const exportLabel = document.getElementById('info-folder');
+  const countLabel = document.getElementById('info-tracks');
+  const durationLabel = document.getElementById('info-duration');
 
-  const presetSelect = document.getElementById('presetSelect');
-  const presetDescription = document.getElementById('presetDescription');
-  const createAlbumFolderEl = document.getElementById('createAlbumFolder');
-  const albumNameEl = document.getElementById('albumName');
-  const releaseFolderSection = document.getElementById('releaseFolderSection');
+  const presetSelect = document.getElementById('select-preset');
+  const presetDescription = document.getElementById('preset-desc');
+  const createAlbumFolderEl = document.getElementById('chk-folder');
+  const albumNameEl = document.getElementById('input-folder-name');
+  const releaseFolderSection = document.getElementById('release-folder-section');
 
-  const progressWrap = document.getElementById('progressWrap');
-  const trackTitle = document.getElementById('trackTitle');
-  const overallPercent = document.getElementById('overallPercent');
-  const statusLine = document.getElementById('statusLine');
-  const totalFill = document.getElementById('totalFill');
+  const progressWrap = document.getElementById('progress-wrap');
+  const trackTitle = document.getElementById('track-title');
+  const overallPercent = document.getElementById('prog-pct');
+  const statusLine = document.getElementById('st-txt');
+  const statusDot = document.getElementById('st-dot');
+  const statusLabel = document.getElementById('prog-label');
+  const totalFill = document.getElementById('prog-fill');
 
-  const renderBtn = document.getElementById('renderBtn');
-  const cancelBtn = document.getElementById('cancelBtn');
+  const renderBtn = document.getElementById('btn-export');
+  const cancelBtn = document.getElementById('btn-cancel');
 
-  const coverImg = document.getElementById('coverImg');
-  const coverPlaceholder = document.getElementById('coverPlaceholder');
-  const coverPreviewText = document.getElementById('coverPreviewText');
+  const coverImg = document.getElementById('cover-img');
+  const coverPlaceholder = document.getElementById('cover-ph');
+  const coverPreviewText = document.getElementById('cover-fname');
+  const coverDimsLabel = document.getElementById('cover-fdims');
+  const artBtnLabel = document.getElementById('art-btn-lbl');
 
-  const toastWrap = document.getElementById('toastWrap');
-  const logsRow = document.getElementById('logsRow');
+  const toastWrap = document.getElementById('toast-wrap');
+  const openActions = document.getElementById('open-actions');
 
-  const btnAddTracks = document.getElementById('btnAddTracks');
-  const btnClearTracks = document.getElementById('btnClearTracks');
-  const btnCover = document.getElementById('btnCover');
-  const btnExport = document.getElementById('btnExport');
-  const btnNewAlbum = document.getElementById('btnNewAlbum');
-  const btnOpenFolder = document.getElementById('btnOpenFolder');
-  const btnOpenLogs = document.getElementById('btnOpenLogs');
-  const coverPreview = document.querySelector('.coverPreview');
+  const btnAddTracks = document.getElementById('btn-add');
+  const btnClearTracks = document.getElementById('btn-clear');
+  const btnCover = document.getElementById('btn-art');
+  const btnExport = document.getElementById('btn-folder');
+  const btnNewAlbum = document.getElementById('btn-new');
+  const btnOpenFolder = document.getElementById('btn-open-folder');
+  const btnOpenLogs = document.getElementById('btn-open-logs');
+  const coverPreview = document.getElementById('cover-thumb');
+  const folderPathLabel = document.getElementById('folder-path');
 
-  let tracks = []; // { path, displayName, outputBase, originalBase, trackNo, hasTrackNo, durationSec }
+  let tracks = [];
   let trackPathSet = new Set();
   let nextTrackOrder = 1;
 
@@ -692,6 +888,7 @@
 
   let isRendering = false;
   let isValidating = false;
+  let uiLocked = false;
   let audioDialogInFlight = false;
   let imageDialogInFlight = false;
   let folderDialogInFlight = false;
@@ -723,12 +920,13 @@
   ];
 
   function setUiLocked(locked) {
+    uiLocked = !!locked;
     uiDisableList.forEach((el) => {
       if (!el) return;
       el.disabled = !!locked;
     });
-    renderBtn.disabled = !!locked;
     document.body.classList.toggle('locked', !!locked);
+    refreshActionState();
     updateReleaseFolderState();
   }
 
@@ -738,12 +936,41 @@
     statusResetTimer = null;
   }
 
+  function readyHintText() {
+    const missing = [];
+    if (!tracks.length) missing.push('tracks');
+    if (!imageFile) missing.push('cover art');
+    if (!exportFolder) missing.push('export folder');
+    if (missing.length) return `Add ${missing.join(', ')} to begin.`;
+    return 'Ready to export.';
+  }
+
+  function setStatusDot(mode) {
+    const key = String(mode || '').toLowerCase();
+    const activeSet = new Set(['planning', 'preparing', 'starting', 'rendering', 'finalizing', 'exporting', 'cancelling']);
+    statusDot.classList.remove('active', 'done');
+    if (key === 'done') {
+      statusDot.classList.add('done');
+      return;
+    }
+    if (activeSet.has(key)) {
+      statusDot.classList.add('active');
+    }
+  }
+
   function setStatus(text, resetAfterMs = 0) {
     clearStatusResetTimer();
-    statusLine.textContent = text;
+    const normalized = String(text || '').trim() || 'Ready';
+    statusLabel.textContent = normalized;
+    statusLine.textContent = normalized === 'Ready' ? readyHintText() : normalized;
+    setStatusDot(normalized);
     if (resetAfterMs > 0) {
       statusResetTimer = setTimeout(() => {
-        if (!isRendering) statusLine.textContent = 'Ready';
+        if (!isRendering) {
+          statusLabel.textContent = 'Ready';
+          statusLine.textContent = readyHintText();
+          setStatusDot('ready');
+        }
       }, resetAfterMs);
     }
   }
@@ -806,6 +1033,9 @@
     hasDeterminateSignal = true;
     lastProgressSignal = 'both';
     applyDeterminateProgress(1);
+    totalFill.classList.remove('idle');
+    totalFill.classList.add('done');
+    setStatusDot('done');
     stopProgressRaf();
   }
 
@@ -817,6 +1047,8 @@
     lastVisualProgress = 0;
     hasDeterminateSignal = false;
     lastProgressSignal = 'none';
+    totalFill.classList.remove('done');
+    totalFill.classList.add('idle');
     applyDeterminateProgress(0);
   }
 
@@ -854,16 +1086,6 @@
     return idx > 0 ? base.slice(0, idx) : base;
   }
 
-  function pathJoin(base, child) {
-    const lhs = String(base || '');
-    const rhs = String(child || '');
-    if (!lhs) return rhs;
-    const sep = lhs.includes('\\') && !lhs.includes('/') ? '\\' : '/';
-    const left = lhs.replace(/[\\/]+$/g, '');
-    const right = rhs.replace(/^[\\/]+/g, '');
-    return `${left}${sep}${right}`;
-  }
-
   function pathDirname(p) {
     const raw = String(p || '').replace(/\\/g, '/');
     const noSlash = raw.replace(/\/+$/g, '');
@@ -891,7 +1113,41 @@
     return String(x).padStart(2, '0');
   }
 
-  function updateCounts() { countLabel.textContent = String(tracks.length); }
+  function formatDuration(totalSec) {
+    const sec = Math.max(0, Math.round(Number(totalSec) || 0));
+    if (sec <= 0) return '—';
+    const h = Math.floor(sec / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    const s = sec % 60;
+    if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+    return `${m}:${String(s).padStart(2, '0')}`;
+  }
+
+  function formatTrackDuration(totalSec) {
+    const sec = Math.max(0, Math.round(Number(totalSec) || 0));
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return `${m}:${String(s).padStart(2, '0')}`;
+  }
+
+  function refreshActionState() {
+    const ready = !uiLocked && !isRendering && !isValidating && tracks.length > 0 && Boolean(imageFile) && Boolean(exportFolder);
+    renderBtn.disabled = !ready;
+    btnClearTracks.disabled = uiLocked || isRendering || tracks.length === 0;
+
+    countLabel.textContent = String(tracks.length);
+    trackBadge.textContent = String(tracks.length);
+    trackBadge.classList.toggle('on', tracks.length > 0);
+
+    const durationSec = tracks.reduce((sum, t) => sum + Math.max(0, Number(t.durationSec) || 0), 0);
+    durationLabel.textContent = formatDuration(durationSec);
+    durationLabel.className = tracks.length > 0 ? 'sv' : 'sv dim';
+
+    if (!isRendering && statusLabel.textContent === 'Ready') {
+      statusLine.textContent = readyHintText();
+      setStatusDot(ready ? 'done' : 'ready');
+    }
+  }
 
   function showToast(message, type = 'info', ttlMs = 2400) {
     const el = document.createElement('div');
@@ -942,14 +1198,15 @@
   }
 
   function showProgressUI() {
-    progressWrap.style.display = 'block';
+    progressWrap.style.display = 'flex';
   }
+
   function hideProgressUI({ preserveStatus = false } = {}) {
     resetOverallProgress();
     trackTitle.textContent = 'Track —';
+    openActions.classList.add('is-hidden');
+    btnOpenLogs.classList.add('is-hidden');
     if (!preserveStatus) setStatus('Ready');
-    btnOpenFolder.classList.add('isHidden');
-    logsRow.classList.add('hidden');
   }
 
   function selectedPresetPolicy() {
@@ -1011,48 +1268,76 @@
   }
 
   function renderTrackList() {
-    audioList.replaceChildren();
+    trackList.replaceChildren();
 
-    tracks.forEach((t) => {
-      const li = document.createElement('li');
-      li.dataset.path = t.path;
+    tracks.forEach((t, index) => {
+      const row = document.createElement('div');
+      row.className = 't-row';
+      row.dataset.path = t.path;
 
-      const text = document.createElement('div');
-      text.className = 'trackText';
+      const no = document.createElement('span');
+      no.className = 't-no';
+      const trackNoText = t.hasTrackNo ? pad2(t.trackNo) : String(index + 1).padStart(2, '0');
+      no.textContent = trackNoText || String(index + 1).padStart(2, '0');
 
-      const main = document.createElement('div');
-      main.className = 'trackMain';
+      const info = document.createElement('div');
+      info.className = 't-info';
+
+      const name = document.createElement('div');
+      name.className = 't-name';
       const prefixDot = t.hasTrackNo ? `${pad2(t.trackNo)}. ` : '';
-      main.textContent = `${prefixDot}${t.displayName || t.originalBase}`;
+      name.textContent = `${prefixDot}${t.displayName || t.originalBase}`;
 
-      const sub = document.createElement('div');
-      sub.className = 'trackSub';
+      const meta = document.createElement('div');
+      meta.className = 't-meta';
+
+      const dur = document.createElement('span');
+      dur.textContent = formatTrackDuration(t.durationSec);
+
+      const sep = document.createElement('span');
+      sep.className = 't-sep';
+
+      const out = document.createElement('span');
       const outPreviewBase = buildOutputBaseForTrack(t);
-      sub.textContent = `${t.originalBase}  →  ${outPreviewBase}.mp4`;
+      out.textContent = `${outPreviewBase}.mp4`;
 
-      text.appendChild(main);
-      text.appendChild(sub);
+      meta.appendChild(dur);
+      meta.appendChild(sep);
+      meta.appendChild(out);
+      info.appendChild(name);
+      info.appendChild(meta);
 
-      const x = document.createElement('div');
-      x.className = 'removeBtn';
-      x.title = 'Remove';
-      x.textContent = '✕';
-      if (isRendering) x.classList.add('disabled');
+      const st = document.createElement('div');
+      st.className = 't-st pending';
+      st.textContent = '•';
 
-      x.addEventListener('click', () => {
-        tracks = tracks.filter(z => z.path !== t.path);
+      const removeBtn = document.createElement('button');
+      removeBtn.type = 'button';
+      removeBtn.className = 't-rm';
+      removeBtn.setAttribute('aria-label', 'Remove');
+      removeBtn.title = 'Remove';
+      removeBtn.textContent = '✕';
+      removeBtn.disabled = isRendering;
+
+      removeBtn.addEventListener('click', (event) => {
+        event.stopPropagation();
+        tracks = tracks.filter((z) => z.path !== t.path);
         trackPathSet.delete(t.path);
         sortTracksIfSafe();
         scheduleRenderTrackList();
       });
 
-      li.appendChild(text);
-      li.appendChild(x);
-
-      audioList.appendChild(li);
+      row.appendChild(no);
+      row.appendChild(info);
+      row.appendChild(st);
+      row.appendChild(removeBtn);
+      trackList.appendChild(row);
     });
 
-    updateCounts();
+    tracksEmpty.style.display = tracks.length ? 'none' : 'flex';
+    trackList.style.display = tracks.length ? 'block' : 'none';
+
+    refreshActionState();
   }
 
   function clearTracksOnly() {
@@ -1065,16 +1350,27 @@
   function clearCover() {
     imageFile = null;
     coverLabel.textContent = 'Not selected';
+    coverLabel.className = 'sv dim';
+
     coverImg.src = '';
     coverImg.style.display = 'none';
-    coverPlaceholder.style.display = 'block';
-    coverPreviewText.textContent = 'No cover art';
+    coverPlaceholder.style.display = 'flex';
+    coverPreviewText.textContent = 'Not selected';
+    coverPreviewText.className = 'cover-fname empty';
+    coverDimsLabel.textContent = 'JPG · PNG · WebP';
+    artBtnLabel.textContent = 'Choose cover art';
+
+    refreshActionState();
   }
 
   function clearExportFolder() {
     exportFolder = null;
     exportLabel.textContent = 'Not selected';
+    exportLabel.className = 'sv dim';
+    folderPathLabel.textContent = 'Not selected';
+    folderPathLabel.className = 'folder-path-txt empty';
     lastFinalExportFolder = null;
+    refreshActionState();
   }
 
   function newAlbumReset() {
@@ -1176,7 +1472,7 @@
 
           tracks.push({
             path: f,
-            displayName: originalBase + ' (reading tags)',
+            displayName: `${originalBase} (reading tags)`,
             outputBase: originalBase,
             originalBase,
             durationSec: Math.max(0, Number(probe?.durationSec) || 0),
@@ -1231,6 +1527,17 @@
         btnAddTracks.disabled = false;
         btnNewAlbum.disabled = false;
       }
+      refreshActionState();
+    }
+  }
+
+  function updateCoverMetaFromImage(fileName) {
+    const ext = pathBasename(fileName).split('.').pop();
+    if (coverImg.naturalWidth > 0 && coverImg.naturalHeight > 0) {
+      const extLabel = ext ? String(ext).toUpperCase() : 'IMG';
+      coverDimsLabel.textContent = `${coverImg.naturalWidth} × ${coverImg.naturalHeight} · ${extLabel}`;
+    } else {
+      coverDimsLabel.textContent = 'Image selected';
     }
   }
 
@@ -1245,14 +1552,26 @@
       imageFile = file;
       const coverName = pathBasename(file);
       coverLabel.textContent = coverName;
+      coverLabel.className = 'sv ok';
       coverPreviewText.textContent = coverName;
+      coverPreviewText.className = 'cover-fname';
+      artBtnLabel.textContent = 'Change cover art';
 
+      coverImg.onload = () => {
+        coverImg.style.display = 'block';
+        coverPlaceholder.style.display = 'none';
+        updateCoverMetaFromImage(file);
+      };
+      coverImg.onerror = () => {
+        coverImg.style.display = 'none';
+        coverPlaceholder.style.display = 'flex';
+        coverDimsLabel.textContent = 'Could not preview image';
+      };
       coverImg.src = filePathToUrl(file);
-      coverImg.style.display = 'block';
-      coverPlaceholder.style.display = 'none';
     } finally {
       imageDialogInFlight = false;
       if (!isRendering) btnCover.disabled = false;
+      refreshActionState();
     }
   }
 
@@ -1265,9 +1584,13 @@
       if (!folder) return;
       exportFolder = folder;
       exportLabel.textContent = folder;
+      exportLabel.className = 'sv ok';
+      folderPathLabel.textContent = folder;
+      folderPathLabel.className = 'folder-path-txt ok';
     } finally {
       folderDialogInFlight = false;
       if (!isRendering) btnExport.disabled = false;
+      refreshActionState();
     }
   }
 
@@ -1328,8 +1651,25 @@
   }
 
   async function cancelRender() {
-    if (!isRendering) return;
-    await window.api.cancelRender();
+    if (!isRendering) return { didCancel: false, phase: 'IDLE' };
+    try {
+      const result = await window.api.cancelRender();
+      const didCancel = Boolean(result?.didCancel);
+      const phase = String(result?.phase || '').toUpperCase() || 'UNKNOWN';
+      const reason = String(result?.reason || '');
+      uiLog('ui.cancel_request', { didCancel, phase, reason });
+      if (didCancel) {
+        const status = phase === 'PLANNING' ? 'Cancelling (planning)...' : 'Cancelling...';
+        setStatus(status);
+      } else if (phase === 'IDLE') {
+        setStatus('Nothing to cancel.', 1200);
+      }
+      return result;
+    } catch (err) {
+      uiLog('ui.cancel_failed', { message: String(err?.message || err) }, 'warn');
+      setStatus('Cancel failed.', 1500);
+      throw err;
+    }
   }
 
   function updateProgressFromEngine(payload) {
@@ -1354,6 +1694,7 @@
       const visualFloor = Math.min(0.15, Math.max(lastVisualProgress, readCurrentFillProgress()));
       progressDisplay = Math.max(progressDisplay, visualFloor);
       hasDeterminateSignal = true;
+      totalFill.classList.remove('idle', 'done');
       applyDeterminateProgress(progressDisplay);
     }
     let target = hasValidRaw ? raw : progressTarget;
@@ -1368,6 +1709,8 @@
     if (disposeProgress) disposeProgress();
     if (disposeStatus) disposeStatus();
 
+    if (typeof window.api?.onRenderProgress !== 'function' || typeof window.api?.onRenderStatus !== 'function') return;
+
     disposeProgress = window.api.onRenderProgress((payload) => updateProgressFromEngine(payload));
 
     disposeStatus = window.api.onRenderStatus(({ phase }) => {
@@ -1377,6 +1720,7 @@
         setStatus('Planning...');
       } else if (normalized === 'rendering') {
         setStatus('Rendering...');
+        totalFill.classList.remove('idle', 'done');
         progressDisplay = 0;
         progressTarget = 0;
         applyDeterminateProgress(0);
@@ -1451,8 +1795,8 @@
     showProgressUI();
     resetOverallProgress();
     trackTitle.textContent = `Track 1/${Math.max(1, toRender.length)}: —`;
-    btnOpenFolder.classList.add('isHidden');
-    logsRow.classList.add('hidden');
+    openActions.classList.add('is-hidden');
+    btnOpenLogs.classList.add('is-hidden');
     lastLogFolder = null;
     setStatus('Planning...');
 
@@ -1498,19 +1842,22 @@
           const reportFolder = pathDirname(res?.reportPath || '');
           if (reportFolder) {
             lastLogFolder = reportFolder;
-            logsRow.classList.remove('hidden');
+            openActions.classList.remove('is-hidden');
+            btnOpenLogs.classList.remove('is-hidden');
           }
           showToast(msg, 'warn', 5000);
         }
         return;
       }
 
+      completeProgressNow();
       setStatus('Done');
       if (res?.debugLogPath) {
         const debugFolder = pathDirname(res.debugLogPath);
         if (debugFolder) lastLogFolder = debugFolder;
       }
-      btnOpenFolder.classList.remove('isHidden');
+      openActions.classList.remove('is-hidden');
+      btnOpenLogs.classList.add('is-hidden');
     } catch (err) {
       const msg = humanizeErrorMessage(err?.message || err || 'Unknown error');
       uiLog('ui.export_failed', {
@@ -1526,14 +1873,91 @@
       setUiLocked(false);
       renderBtn.textContent = 'Export';
       cancelBtn.disabled = true;
+      refreshActionState();
     }
+  }
+
+  function exposeTestHooks() {
+    window.__frenderTestHooks = {
+      injectMockTracks(count = 50) {
+        const n = Math.max(0, Number(count) || 0);
+        tracks = [];
+        trackPathSet = new Set();
+        nextTrackOrder = 1;
+        for (let i = 0; i < n; i += 1) {
+          const index = i + 1;
+          const p = `/tmp/mock-track-${index}.mp3`;
+          trackPathSet.add(p);
+          tracks.push({
+            path: p,
+            displayName: `Mock Track ${String(index).padStart(2, '0')}`,
+            outputBase: `Mock Track ${String(index).padStart(2, '0')}`,
+            originalBase: `Mock Track ${String(index).padStart(2, '0')}`,
+            durationSec: 60 + index,
+            trackNo: index,
+            hasTrackNo: true,
+            inputOrder: nextTrackOrder++,
+          });
+        }
+        sortTracksIfSafe();
+        renderTrackList();
+      },
+      setMockCoverAndFolder() {
+        imageFile = '/tmp/mock-cover.jpg';
+        coverLabel.textContent = 'mock-cover.jpg';
+        coverLabel.className = 'sv ok';
+        coverPreviewText.textContent = 'mock-cover.jpg';
+        coverPreviewText.className = 'cover-fname';
+        coverDimsLabel.textContent = '3000 × 3000 · JPG';
+        artBtnLabel.textContent = 'Change cover art';
+        coverImg.style.display = 'block';
+        coverPlaceholder.style.display = 'none';
+
+        exportFolder = '/tmp/mock-export';
+        exportLabel.textContent = exportFolder;
+        exportLabel.className = 'sv ok';
+        folderPathLabel.textContent = exportFolder;
+        folderPathLabel.className = 'folder-path-txt ok';
+
+        refreshActionState();
+      },
+      getLayoutMetrics() {
+        const tb = document.querySelector('.tb');
+        const secHd = document.querySelector('.left .sec-hd');
+        const firstTrack = trackList.querySelector('.t-row');
+        const tracksRect = tracksBody.getBoundingClientRect();
+        const rightRect = document.querySelector('.right').getBoundingClientRect();
+        return {
+          windowInnerWidth: window.innerWidth,
+          windowInnerHeight: window.innerHeight,
+          bodyOverflowX: getComputedStyle(document.body).overflowX,
+          bodyOverflowY: getComputedStyle(document.body).overflowY,
+          htmlOverflowX: getComputedStyle(document.documentElement).overflowX,
+          htmlOverflowY: getComputedStyle(document.documentElement).overflowY,
+          hasWindowVerticalScrollbar:
+            (document.documentElement.scrollHeight - document.documentElement.clientHeight) > 0
+            || (document.body.scrollHeight - document.body.clientHeight) > 0,
+          hasWindowHorizontalScrollbar:
+            (document.documentElement.scrollWidth - document.documentElement.clientWidth) > 0
+            || (document.body.scrollWidth - document.body.clientWidth) > 0,
+          trackListScrollable: tracksBody.scrollHeight > tracksBody.clientHeight,
+          headerBottom: tb ? tb.getBoundingClientRect().bottom : -1,
+          sectionHeaderTop: secHd ? secHd.getBoundingClientRect().top : -1,
+          sectionHeaderBottom: secHd ? secHd.getBoundingClientRect().bottom : -1,
+          firstTrackTop: firstTrack ? firstTrack.getBoundingClientRect().top : -1,
+          tracksTop: tracksRect.top,
+          rightTop: rightRect.top,
+          trackCount: tracks.length,
+        };
+      },
+    };
   }
 
   btnAddTracks.addEventListener('click', pickAudios);
   btnClearTracks.addEventListener('click', clearTracksOnly);
   btnCover.addEventListener('click', pickImage);
   coverPreview.addEventListener('click', () => {
-    if (!imageFile) pickImage();
+    if (!imageFile && !isRendering) pickImage();
   });
   btnExport.addEventListener('click', chooseFolder);
   btnNewAlbum.addEventListener('click', newAlbumReset);
@@ -1550,9 +1974,11 @@
 
   renderTrackList();
   clearCover();
+  clearExportFolder();
   updateReleaseFolderState();
   hideProgressUI();
   ensureRenderListeners();
+  exposeTestHooks();
   loadPresets();
 </script>
 
