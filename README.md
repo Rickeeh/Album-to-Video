@@ -16,9 +16,9 @@ npm start
 
 ## Release
 
-- Para fazer release, siga `docs/release-checklist.md`.
-- Windows requer bins vendorizados + `verify:win-bins`.
-- Logs por sessão em `%APPDATA%/.../logs/...` (ver `logger.ready`).
+- To release, follow `docs/release-checklist.md`.
+- Windows requires vendor bins + `verify:win-bins`.
+- Logs by session at `%APPDATA%/.../logs/...` (ver `logger.ready`).
 
 ## Merge PRs #1-#5 in order
 
