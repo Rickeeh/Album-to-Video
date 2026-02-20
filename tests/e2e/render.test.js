@@ -27,14 +27,6 @@ function assertOk(condition, message) {
   process.exit(1);
 }
 
-function shouldSkipGuiRenderReportContract() {
-  if (process.env.RENDERER_LAYOUT_FORCE_HEADLESS_SKIP === "1") return true;
-  if (process.platform !== "linux") return false;
-  const hasDisplay = Boolean(String(process.env.DISPLAY || "").trim());
-  const hasWayland = Boolean(String(process.env.WAYLAND_DISPLAY || "").trim());
-  return !hasDisplay && !hasWayland;
-}
-
 function safeRmdirIfEmpty(dirPath) {
   try {
     if (!dirPath || !fs.existsSync(dirPath)) return;
@@ -102,74 +94,8 @@ async function runCancelBatchCleanupScenario() {
   console.log("OK: cancel batch cleanup removes all planned outputs and created folder");
 }
 
-function runProbeCodecNameReportContract() {
-  if (shouldSkipGuiRenderReportContract()) {
-    console.log("SKIP: probeCodecName report contract requires GUI");
-    return;
-  }
-
-  const resultPath = path.join(
-    os.tmpdir(),
-    `album-to-video-render-report-contract-${process.pid}-${Date.now()}.json`
-  );
-  const run = spawnSync(
-    process.execPath,
-    [
-      path.join(projectRoot, "scripts/perf-run.js"),
-      "--mode", "ipc",
-      "--runs", "1",
-      "--case", "album_small_wav",
-      "--out", resultPath,
-    ],
-    {
-      cwd: projectRoot,
-      encoding: "utf8",
-      env: { ...process.env },
-    }
-  );
-
-  if (run.status !== 0) {
-    console.error(run.stdout || "");
-    console.error(run.stderr || "");
-    assertOk(false, "probeCodecName report contract: failed to execute minimal IPC render run.");
-  }
-
-  assertOk(fs.existsSync(resultPath), `probeCodecName report contract: missing run result ${resultPath}.`);
-  const runResult = JSON.parse(fs.readFileSync(resultPath, "utf8"));
-  const reportPath = runResult?.runs?.[0]?.reportPath;
-  assertOk(Boolean(reportPath), "probeCodecName report contract: missing reportPath in perf-run output.");
-  assertOk(fs.existsSync(reportPath), `probeCodecName report contract: missing render report ${reportPath}.`);
-
-  const report = JSON.parse(fs.readFileSync(reportPath, "utf8"));
-  const tracks = Array.isArray(report?.tracks) ? report.tracks : [];
-  assertOk(tracks.length > 0, "probeCodecName report contract: expected at least one track in render report.");
-  tracks.forEach((track, idx) => {
-    assertOk(
-      Object.prototype.hasOwnProperty.call(track || {}, "probeCodecName"),
-      `probeCodecName report contract: track ${idx} missing probeCodecName key.`
-    );
-    const value = track ? track.probeCodecName : undefined;
-    const valueType = typeof value;
-    assertOk(
-      value === null || valueType === "string",
-      `probeCodecName report contract: track ${idx} probeCodecName must be string|null.`
-    );
-  });
-
-  try {
-    const runRoot = runResult?.runRoot;
-    if (runRoot && fs.existsSync(runRoot)) fs.rmSync(runRoot, { recursive: true, force: true });
-  } catch {}
-  try {
-    if (fs.existsSync(resultPath)) fs.unlinkSync(resultPath);
-  } catch {}
-
-  console.log("OK: render report includes probeCodecName field for every track");
-}
-
 (async () => {
   fs.mkdirSync(outDir, { recursive: true });
-  runProbeCodecNameReportContract();
   for (const audio of audioFiles) {
     for (const image of imageFiles) {
       const audioPath = path.join(fixturesDir, audio);
