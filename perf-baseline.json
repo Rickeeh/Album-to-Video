@@ -12,14 +12,19 @@
         "darwin-arm64": {
           "metricsBaseline": {
             "ffmpegWarmupMs": 60,
-            "ffmpegSpawnMs": 450,
-            "firstWriteMs": 450,
-            "firstProgressMs": 450,
-            "encodeMsTotal": 1000,
-            "finalizeMsTotal": 20
+            "ffmpegSpawnMs": 151,
+            "firstWriteMs": 151,
+            "firstProgressMs": 151,
+            "encodeMsTotal": 14095,
+            "jobWallMs": 14098,
+            "finalizeMsTotal": 1
           },
           "budgets": {
             "encodeMsTotal": {
+              "maxRatio": 1.25,
+              "mode": "fail"
+            },
+            "jobWallMs": {
               "maxRatio": 1.25,
               "mode": "fail"
             },

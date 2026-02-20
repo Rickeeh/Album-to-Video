@@ -92,6 +92,7 @@ function loadBaselineCase(projectRoot, baselinePath, caseId) {
 function extractRunMetrics(report) {
   const perf = (report && typeof report === 'object') ? report.perf || {} : {};
 
+  const jobWallMs = safeMs(perf?.jobWallMs ?? report?.job?.durationMs);
   const finalizeSummaryTotal = safeMs(perf?.finalizeSummary?.totalMs);
   const finalizeMs = safeMs(perf?.finalizeMs);
 
@@ -101,6 +102,7 @@ function extractRunMetrics(report) {
     firstWriteMs: safeMs(perf?.firstWriteMs?.avg),
     firstProgressMs: safeMs(perf?.firstProgressMs?.avg),
     encodeMsTotal: safeMs(perf?.encodeMsTotal),
+    jobWallMs,
     finalizeMsTotal: finalizeSummaryTotal !== null ? finalizeSummaryTotal : finalizeMs,
   };
 }
@@ -112,6 +114,7 @@ function aggregateMedianMetrics(runs) {
     'firstWriteMs',
     'firstProgressMs',
     'encodeMsTotal',
+    'jobWallMs',
     'finalizeMsTotal',
   ];
 
@@ -166,6 +169,7 @@ function makeSyntheticReport({ caseId, runIndex, startedAtMs, endedAtMs, encodeM
       jobDoneMs: null,
       hasRealSignal: null,
       encodeMsTotal,
+      jobWallMs: Math.max(0, endedAtMs - startedAtMs),
       finalizeMs: 0,
       engineFinalState: 'DONE',
       binaryIntegrityBypassUsed: false,

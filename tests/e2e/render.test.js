@@ -96,6 +96,11 @@ async function runCancelBatchCleanupScenario() {
 
 (async () => {
   fs.mkdirSync(outDir, { recursive: true });
+  const mainSource = fs.readFileSync(path.join(projectRoot, "main.js"), "utf8");
+  assertOk(
+    mainSource.includes("probeCodecName: trackPlan.probeCodecName ?? null"),
+    "Expected track report to include probeCodecName observability field."
+  );
   for (const audio of audioFiles) {
     for (const image of imageFiles) {
       const audioPath = path.join(fixturesDir, audio);

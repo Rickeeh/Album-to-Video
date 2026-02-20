@@ -3416,6 +3416,7 @@ registerIpcHandler('render-album', async (event, payload) => {
       const trackReport = {
         inputPath: audioPath,
         durationSec: trackPlan.durationSec || 0,
+        probeCodecName: trackPlan.probeCodecName ?? null,
         outputFinalPath,
         partialPath,
         ffmpegArgsBase: trackPlan.ffmpegArgsBase,
