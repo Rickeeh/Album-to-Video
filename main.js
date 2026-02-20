@@ -126,14 +126,46 @@ function getRenderSignalsTail(maxEvents = RENDER_SIGNAL_TAIL_MAX) {
   return renderSignalTail.slice(-limit);
 }
 
+let ipcSendWarningLastAtMs = 0;
+
+function logIpcSendWarning(msg, payload = {}) {
+  const nowMs = Date.now();
+  if ((nowMs - ipcSendWarningLastAtMs) < 2000) return;
+  ipcSendWarningLastAtMs = nowMs;
+  sessionLogger?.warn?.(msg, payload);
+}
+
+function isIpcSenderAlive(sender) {
+  if (!sender || typeof sender.send !== 'function') return false;
+  if (typeof sender.isDestroyed === 'function' && sender.isDestroyed()) return false;
+  return true;
+}
+
+function safeSendToRenderer(sender, channel, payload) {
+  if (!isIpcSenderAlive(sender)) {
+    logIpcSendWarning('ipc.sender_unavailable', { channel });
+    return false;
+  }
+  try {
+    sender.send(channel, payload);
+    return true;
+  } catch (err) {
+    logIpcSendWarning('ipc.sender_send_failed', {
+      channel,
+      message: String(err?.message || err),
+    });
+    return false;
+  }
+}
+
 function sendRenderStatus(sender, payload) {
   recordRenderSignal('status', payload);
-  sender.send('render-status', payload);
+  safeSendToRenderer(sender, 'render-status', payload);
 }
 
 function sendRenderProgress(sender, payload) {
   recordRenderSignal('progress', payload);
-  sender.send('render-progress', payload);
+  safeSendToRenderer(sender, 'render-progress', payload);
 }
 
 function logIpcHandlerFailure(methodName, err, payload) {
@@ -170,6 +202,24 @@ async function runDialogSingleFlight(fallbackValue, opener) {
     }
   })();
   return await dialogInFlight;
+}
+
+function getDialogParentWindow(event) {
+  const senderWindow = event?.sender ? BrowserWindow.fromWebContents(event.sender) : null;
+  const win = (senderWindow && !senderWindow.isDestroyed()) ? senderWindow : mainWindow;
+  if (!win || win.isDestroyed()) return null;
+  try {
+    if (win.isMinimized()) win.restore();
+    if (!win.isVisible()) win.show();
+    win.focus();
+  } catch {}
+  return win;
+}
+
+async function showOpenDialogForEvent(event, options) {
+  const parent = getDialogParentWindow(event);
+  if (parent) return await dialog.showOpenDialog(parent, options);
+  return await dialog.showOpenDialog(options);
 }
 
 perfMark('app.start', { pid: process.pid, platform: process.platform, arch: process.arch });
@@ -565,11 +615,25 @@ const currentJob = {
   id: null,
   fsm: null,
   ffmpeg: null,
+  phase: 'IDLE',
+  cancelRequested: false,
   cancelled: false,
   cancelReason: null,
   active: false,
   cleanupContext: null,
 };
+
+const JOB_PHASES = Object.freeze({
+  IDLE: 'IDLE',
+  PLANNING: 'PLANNING',
+  RENDERING: 'RENDERING',
+  FINALIZING: 'FINALIZING',
+});
+
+function normalizeJobPhase(rawPhase) {
+  const phase = String(rawPhase || '').toUpperCase();
+  return JOB_PHASES[phase] || JOB_PHASES.IDLE;
+}
 
 const lifecycleGuards = {
   allowWindowClose: false,
@@ -580,6 +644,7 @@ const lifecycleGuards = {
 const REASON_CODES = Object.freeze({
   CANCELLED: 'CANCELLED',
   TIMEOUT: 'TIMEOUT',
+  WATCHDOG_TIMEOUT: 'WATCHDOG_TIMEOUT',
   FFMPEG_EXIT_NONZERO: 'FFMPEG_EXIT_NONZERO',
   PROBE_FAILED: 'PROBE_FAILED',
   BIN_INTEGRITY_BYPASS: 'BIN_INTEGRITY_BYPASS',
@@ -590,9 +655,15 @@ async function requestRenderCancellation({
   reason = REASON_CODES.CANCELLED,
   source = 'unknown',
 } = {}) {
-  if (!currentJob.active) return { cancelled: false, reason: 'inactive' };
-  if (currentJob.fsm?.isTerminal?.()) return { cancelled: false, reason: 'terminal' };
+  const phase = normalizeJobPhase(currentJob.phase);
+  if (phase === JOB_PHASES.IDLE) {
+    return { didCancel: false, phase, reason: 'inactive' };
+  }
+  if (currentJob.fsm?.isTerminal?.()) {
+    return { didCancel: false, phase, reason: 'terminal' };
+  }
 
+  currentJob.cancelRequested = true;
   currentJob.cancelled = true;
   currentJob.cancelReason = reason;
   const jobId = currentJob.id || null;
@@ -600,29 +671,57 @@ async function requestRenderCancellation({
 
   sessionLogger?.warn?.('render.cancel_requested', {
     jobId,
+    phase,
     source,
     reason,
     hasCleanupContext: Boolean(cleanupContext),
   });
 
+  if (phase === JOB_PHASES.PLANNING) {
+    return { didCancel: true, phase, reason, cleaned: false };
+  }
+
+  if (phase === JOB_PHASES.FINALIZING) {
+    return { didCancel: true, phase, reason, cleaned: false, deferredCleanup: true };
+  }
+
   if (cleanupContext) {
     await cleanupJob(jobId, reason, cleanupContext);
-    return { cancelled: true, reason, cleaned: true };
+    return { didCancel: true, phase, reason, cleaned: true };
   }
 
   if (currentJob.ffmpeg) {
     await killProcessTree(currentJob.ffmpeg);
-    return { cancelled: true, reason, cleaned: false, killOnly: true };
+    return { didCancel: true, phase, reason, cleaned: false, killOnly: true };
   }
 
-  return { cancelled: true, reason, cleaned: false };
+  return { didCancel: true, phase, reason, cleaned: false };
+}
+
+async function waitForCurrentJobToSettle(timeoutMs = 12000) {
+  const deadlineMs = Date.now() + Math.max(500, Number(timeoutMs) || 12000);
+  while (currentJob.active && Date.now() < deadlineMs) {
+    // Keep lifecycle cancellation deterministic when cleanup is deferred in FINALIZING.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  return !currentJob.active;
 }
 
 async function ensureLifecycleCleanup(source) {
   if (lifecycleGuards.shutdownCleanupPromise) return lifecycleGuards.shutdownCleanupPromise;
   lifecycleGuards.shutdownCleanupPromise = (async () => {
     try {
-      await requestRenderCancellation({ reason: REASON_CODES.CANCELLED, source });
+      const result = await requestRenderCancellation({ reason: REASON_CODES.CANCELLED, source });
+      if (result?.deferredCleanup || currentJob.active) {
+        const settled = await waitForCurrentJobToSettle(12000);
+        if (!settled) {
+          sessionLogger?.warn?.('render.cancel_settle_timeout', {
+            source,
+            phase: normalizeJobPhase(currentJob.phase),
+            jobId: currentJob.id || null,
+          });
+        }
+      }
     } finally {
       lifecycleGuards.shutdownCleanupPromise = null;
     }
@@ -897,13 +996,19 @@ function findLatestSessionLogPath(appLogDir) {
 }
 
 function sanitizeFileBaseName(name) {
-  let cleaned = String(name || '')
+  let cleaned = String(name || '');
+  if (typeof cleaned.normalize === 'function') cleaned = cleaned.normalize('NFC');
+  cleaned = cleaned
     .replace(/[\x00-\x1f]/g, '')
     .replace(/[\/\\:\*\?"<>\|]/g, '')
     .replace(/\s+/g, ' ')
     .trim();
 
   if (!cleaned) cleaned = 'Untitled';
+  const maxBaseLength = process.platform === 'win32' ? 120 : 240;
+  if (cleaned.length > maxBaseLength) {
+    cleaned = cleaned.slice(0, maxBaseLength).trim();
+  }
 
   // Windows: reserved names and trailing dots/spaces are invalid.
   if (process.platform === 'win32') {
@@ -1235,7 +1340,17 @@ function buildFfmpegArgsBase({
 }) {
   const preset = getPreset(presetKey);
   const fps = GLOBAL_FPS;
-  const videoArgs = typeof preset.engine.video === 'function' ? preset.engine.video() : preset.engine.video;
+  const videoBuilder = preset?.engine?.video;
+  if (typeof videoBuilder !== 'function') {
+    sessionLogger?.error?.('preset.engine.video.invalid', {
+      presetKey: String(preset?.key || presetKey || ''),
+      videoType: typeof videoBuilder,
+    });
+    const e = new Error(`Invalid preset "${String(preset?.key || presetKey || '')}": preset.engine.video must be a function.`);
+    e.code = REASON_CODES.UNCAUGHT;
+    throw e;
+  }
+  const videoArgs = videoBuilder();
   const vf = preset.engine.vf;
   const audioArgs = audioMode === 'copy'
     ? ['-c:a', 'copy']
@@ -1261,7 +1376,10 @@ function buildFfmpegArgsBase({
   ];
 }
 
-async function buildRenderPlan(payload) {
+async function buildRenderPlan(payload, { assertNotCancelled = null } = {}) {
+  const guardCancelled = typeof assertNotCancelled === 'function'
+    ? assertNotCancelled
+    : () => {};
   const {
     tracks,
     imagePath,
@@ -1270,6 +1388,7 @@ async function buildRenderPlan(payload) {
     createAlbumFolder,
   } = payload || {};
 
+  guardCancelled();
   ensureBundledBinaries();
 
   if (!Array.isArray(tracks) || tracks.length === 0) throw new Error('No tracks to export');
@@ -1342,6 +1461,7 @@ async function buildRenderPlan(payload) {
   const plannedTracks = [];
 
   for (let i = 0; i < orderedTracks.length; i++) {
+    guardCancelled();
     const t = orderedTracks[i];
     assertFileReadable(t.audioPath, `Audio file ${i + 1}`);
 
@@ -1353,6 +1473,7 @@ async function buildRenderPlan(payload) {
     const outputFinalPath = uniquePlannedOutputPath(resolvedExportFolder, outputBase, '.mp4', reservedOutputs);
     const partialPath = buildPartialPath(outputFinalPath);
     const probe = await probeAudioInfo(t.audioPath, 5000);
+    guardCancelled();
     const durationSec = Number(probe?.durationSec || 0);
     if (!probe?.ok || !Number.isFinite(durationSec) || durationSec <= 0) {
       const e = new Error(`Probe failed for track ${i + 1}: ${t.audioPath}`);
@@ -1529,6 +1650,7 @@ function runStartupJobRecovery() {
 }
 
 function movePartialToFinalOutput(partialPath, outputFinalPath) {
+  assertOutputPathNotExists(outputFinalPath);
   try {
     fs.renameSync(partialPath, outputFinalPath);
     return { exdevFallback: false, method: 'rename' };
@@ -1547,6 +1669,7 @@ function movePartialToFinalOutput(partialPath, outputFinalPath) {
         e.code = REASON_CODES.UNCAUGHT;
         throw e;
       }
+      assertOutputPathNotExists(outputFinalPath);
       fs.renameSync(finalTmpPath, outputFinalPath);
     } catch (copyErr) {
       safeUnlink(finalTmpPath);
@@ -1555,6 +1678,14 @@ function movePartialToFinalOutput(partialPath, outputFinalPath) {
     fs.unlinkSync(partialPath);
     return { exdevFallback: true, method: 'copy_tmp_rename_unlink_exdev' };
   }
+}
+
+function assertOutputPathNotExists(outputFinalPath) {
+  if (!outputFinalPath) return;
+  if (!fs.existsSync(outputFinalPath)) return;
+  const e = new Error(`Final output already exists: ${outputFinalPath}`);
+  e.code = REASON_CODES.UNCAUGHT;
+  throw e;
 }
 
 function emitFinalizeStep(jobId, step, extra = {}) {
@@ -1577,7 +1708,7 @@ function humanMessageForReason(code, err) {
   const raw = String(err?.message || '').trim();
 
   if (code === REASON_CODES.CANCELLED) return 'Export cancelled.';
-  if (code === REASON_CODES.TIMEOUT) {
+  if (code === REASON_CODES.TIMEOUT || code === REASON_CODES.WATCHDOG_TIMEOUT) {
     return 'Export timed out. Try fewer tracks or shorter files, then export again.';
   }
   if (code === REASON_CODES.PROBE_FAILED) {
@@ -1609,6 +1740,7 @@ function reasonCodeFromError(err) {
   if (Object.values(REASON_CODES).includes(err.code)) return err.code;
   if (err.code === 'CANCELLED') return REASON_CODES.CANCELLED;
   if (err.code === 'TIMEOUT') return REASON_CODES.TIMEOUT;
+  if (err.code === 'WATCHDOG_TIMEOUT') return REASON_CODES.WATCHDOG_TIMEOUT;
   if (err.code === 'UNSUPPORTED_AUDIO') return REASON_CODES.PROBE_FAILED;
   if (err.code === 'FFMPEG_FAILED') return REASON_CODES.FFMPEG_EXIT_NONZERO;
   if (err.code === 'BIN_INTEGRITY_BYPASS') return REASON_CODES.BIN_INTEGRITY_BYPASS;
@@ -1700,8 +1832,7 @@ function createWindow() {
   perfMark('createWindow.start');
   const BASE_W = 1100;
   const BASE_H = 760;
-  const WIN_H = 792;
-  const windowHeight = process.platform === 'win32' ? WIN_H : BASE_H;
+  const windowHeight = BASE_H;
 
   mainWindow = new BrowserWindow({
     title: 'fRender – Album to Video',
@@ -1711,6 +1842,7 @@ function createWindow() {
     minHeight: windowHeight,
     maxWidth: BASE_W,
     maxHeight: windowHeight,
+    useContentSize: true,
     resizable: false,
     maximizable: false,
     backgroundColor: '#0c0f14',
@@ -1748,6 +1880,22 @@ function createWindow() {
           lifecycleGuards.allowWindowClose = false;
         }
       });
+  });
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    sessionLogger?.warn?.('security.window_open_blocked', {
+      url: String(url || '') || null,
+    });
+    return { action: 'deny' };
+  });
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    const targetUrl = String(url || '');
+    const currentUrl = String(mainWindow?.webContents?.getURL?.() || '');
+    if (!currentUrl || currentUrl === 'about:blank') return;
+    if (targetUrl === currentUrl) return;
+    event.preventDefault();
+    sessionLogger?.warn?.('security.navigation_blocked', {
+      url: targetUrl || null,
+    });
   });
   if (process.platform === 'win32') {
     try { mainWindow.removeMenu(); } catch {}
@@ -1940,9 +2088,9 @@ app.on('will-quit', () => {
 });
 
 // ---------------- Dialogs ----------------
-registerIpcHandler('select-audios', async () => {
+registerIpcHandler('select-audios', async (event) => {
   return await runDialogSingleFlight([], async () => {
-    const result = await dialog.showOpenDialog({
+    const result = await showOpenDialogForEvent(event, {
       properties: ['openFile', 'multiSelections'],
       filters: [
         { name: 'Audio', extensions: ['mp3', 'wav', 'aif', 'aiff', 'flac', 'm4a', 'aac', 'ogg'] },
@@ -1953,9 +2101,9 @@ registerIpcHandler('select-audios', async () => {
   });
 });
 
-registerIpcHandler('select-image', async () => {
+registerIpcHandler('select-image', async (event) => {
   return await runDialogSingleFlight(null, async () => {
-    const result = await dialog.showOpenDialog({
+    const result = await showOpenDialogForEvent(event, {
       properties: ['openFile'],
       filters: [
         { name: 'Images', extensions: ['jpg', 'jpeg', 'png', 'webp'] },
@@ -1966,9 +2114,9 @@ registerIpcHandler('select-image', async () => {
   });
 });
 
-registerIpcHandler('select-folder', async () => {
+registerIpcHandler('select-folder', async (event) => {
   return await runDialogSingleFlight(null, async () => {
-    const result = await dialog.showOpenDialog({ properties: ['openDirectory'] });
+    const result = await showOpenDialogForEvent(event, { properties: ['openDirectory'] });
     if (result.canceled) return null;
     const pickedPath = result.filePaths?.[0] || null;
     if (!pickedPath) return null;
@@ -2078,11 +2226,11 @@ registerIpcHandler('probe-audio', async (_event, filePath) => {
 
 // ---------------- Render job (album-level) ----------------
 registerIpcHandler('cancel-render', async () => {
-  await requestRenderCancellation({
+  const result = await requestRenderCancellation({
     reason: REASON_CODES.CANCELLED,
     source: 'renderer_cancel',
   });
-  return true;
+  return result;
 });
 
 registerIpcHandler('export-diagnostics', async (_event, payload) => {
@@ -2166,6 +2314,7 @@ function runFfmpegStillImage({
   audioMode,
   jobId,
   jobStartedAtMs,
+  watchdogNoProgressMs,
 }) {
   const log = typeof debugLog === 'function' ? debugLog : null;
   const outputForProgress = progressOutputPath || outputPath;
@@ -2213,12 +2362,16 @@ function runFfmpegStillImage({
     let speedEwma = 0;
     const speedAlpha = 0.25;
     const PROGRESS_EMIT_THROTTLE_MS = 500;
+    const WATCHDOG_NO_PROGRESS_MS = Math.max(1000, Math.floor(Number(watchdogNoProgressMs || 60000)));
+    const WATCHDOG_POLL_MS = Math.max(250, Math.min(2000, Math.floor(WATCHDOG_NO_PROGRESS_MS / 4)));
     const SIZE_FALLBACK_START_MS = 800;
     const SIZE_FALLBACK_STALL_MS = 1500;
     const SIZE_FALLBACK_POLL_MS = 500;
     let sizeFallbackActive = false;
     let sizeFallbackSamples = 0;
     let sizeFallbackUpdates = 0;
+    let lastProgressAtMs = null;
+    let watchdogTriggered = false;
     let audioInputSizeBytes = 0;
     try {
       audioInputSizeBytes = Math.max(0, Number(fs.statSync(audioPath).size || 0));
@@ -2390,6 +2543,7 @@ function runFfmpegStillImage({
       const jobSignalSeen = typeof getHasRealSignal === 'function' && getHasRealSignal() === true;
       const progressSignal = trackSignal === 'none' && jobSignalSeen ? 'time' : trackSignal;
       const hasSignal = progressSignal !== 'none';
+      if (trackSignal !== 'none') lastProgressAtMs = nowMs;
       if (firstProgressAtMs === null) {
         firstProgressAtMs = nowMs;
         emitFirstProgressLog(progressSignal, 'observed');
@@ -2460,6 +2614,7 @@ function runFfmpegStillImage({
     }
 
     const timeout = setTimeout(() => {
+      if (currentJob.cancelled) return;
       killedByTimeout = true;
       currentJob.cancelled = true;
       currentJob.cancelReason = REASON_CODES.TIMEOUT;
@@ -2496,6 +2651,7 @@ function runFfmpegStillImage({
             lastOutTimeMs = safeMs;
             trackMaxOutTimeMs = Math.max(trackMaxOutTimeMs, safeMs);
             lastOutTimeUpdateAtMs = Date.now();
+            lastProgressAtMs = lastOutTimeUpdateAtMs;
             emitProgressSnapshot({
               phase: 'ENCODING',
               isFinal: false,
@@ -2503,6 +2659,7 @@ function runFfmpegStillImage({
             });
           }
         } else if (line === 'progress=end') {
+          lastProgressAtMs = Date.now();
           const isLastTrack = trackIndex === (safeTrackCount - 1);
           emitProgressSnapshot({
             phase: isLastTrack ? 'FINALIZING' : 'ENCODING',
@@ -2522,6 +2679,25 @@ function runFfmpegStillImage({
         force: false,
       });
     }, SIZE_FALLBACK_POLL_MS);
+    const progressWatchdog = setInterval(() => {
+      if (currentJob.cancelled || watchdogTriggered) return;
+      const nowMs = Date.now();
+      const refMs = Number.isFinite(lastProgressAtMs) ? lastProgressAtMs : ffmpegSpawnedAtMs;
+      const staleForMs = nowMs - refMs;
+      if (staleForMs < WATCHDOG_NO_PROGRESS_MS) return;
+      watchdogTriggered = true;
+      const progressSignal = resolveProgressSignal(trackMaxOutTimeMs, sizeTrackProgressMs);
+      sessionLogger?.error?.('render.watchdog.timeout', {
+        jobId,
+        trackIndex,
+        elapsedMs: Math.max(0, nowMs - ffmpegSpawnedAtMs),
+        progressSignal,
+        lastProgressAtMs: Number.isFinite(lastProgressAtMs) ? Math.max(0, lastProgressAtMs - ffmpegSpawnedAtMs) : null,
+      });
+      currentJob.cancelled = true;
+      currentJob.cancelReason = REASON_CODES.WATCHDOG_TIMEOUT;
+      void killProcessTree(ff);
+    }, WATCHDOG_POLL_MS);
 
     ff.stderr.setEncoding('utf8');
     ff.stderr.on('data', (chunk) => {
@@ -2535,6 +2711,7 @@ function runFfmpegStillImage({
     const finalize = (ok, codeOrErr) => {
       clearTimeout(timeout);
       clearInterval(progressTicker);
+      clearInterval(progressWatchdog);
       currentJob.ffmpeg = null;
 
       const endedAtMs = Date.now();
@@ -2626,13 +2803,57 @@ function runFfmpegStillImage({
   });
 }
 
+function buildCancelledError(reason = REASON_CODES.CANCELLED, stage = 'planning') {
+  const code = reason || REASON_CODES.CANCELLED;
+  const err = new Error(code);
+  err.code = code;
+  err.stage = stage;
+  return err;
+}
+
+function createPlanningCleanupContext({
+  outputFolder,
+  createAlbumFolder,
+  outputFolderExistedBefore = false,
+  outputFolderHadUserContentBefore = false,
+}) {
+  if (!outputFolder || !createAlbumFolder) return null;
+  return {
+    cleanedUp: false,
+    cleanupStats: null,
+    cleanupPromise: null,
+    activeProcess: null,
+    getActiveProcess: () => null,
+    killProcessTree,
+    killWaitTimeoutMs: 1500,
+    currentTrackPartialPath: null,
+    currentTrackTmpPath: null,
+    partialPaths: new Set(),
+    tmpPaths: new Set(),
+    inFinalize: false,
+    finalizingPartials: new Set(),
+    plannedFinalOutputs: new Set(),
+    completedFinalOutputs: new Set(),
+    stagingPaths: new Set(),
+    stagingClosers: new Set(),
+    outputFolder,
+    baseExportFolder: lastSelectedExportFolder || null,
+    outputFolderExistedBefore: Boolean(outputFolderExistedBefore),
+    outputFolderHadUserContentBefore: Boolean(outputFolderHadUserContentBefore),
+    createAlbumFolder: Boolean(createAlbumFolder),
+    safeRmdirIfEmpty,
+    logger: sessionLogger,
+  };
+}
+
 registerIpcHandler('render-album', async (event, payload) => {
-  if (currentJob.active || renderAlbumInFlight) {
+  if (currentJob.active || renderAlbumInFlight || normalizeJobPhase(currentJob.phase) !== JOB_PHASES.IDLE) {
     const reason = 'EXPORT_ALREADY_RUNNING';
     const humanMessage = 'Export already running.';
     sessionLogger?.warn?.('ipc.render_album.rejected_already_running', {
       reason,
       active: Boolean(currentJob.active),
+      phase: normalizeJobPhase(currentJob.phase),
       inFlight: Boolean(renderAlbumInFlight),
       jobId: currentJob.id || null,
     });
@@ -2648,79 +2869,120 @@ registerIpcHandler('render-album', async (event, payload) => {
   }
 
   renderAlbumInFlight = true;
-  try {
-    await startupRecoveryPromise;
-  const payloadObj = (payload && typeof payload === 'object' && !Array.isArray(payload)) ? payload : {};
-  sessionLogger?.info?.('ipc.render_album.received', {
-    hasPayload: Boolean(payload),
-    keys: payloadKeys(payloadObj),
-    trackCount: Array.isArray(payloadObj.tracks) ? payloadObj.tracks.length : 0,
-    jobIdPreview: `pending-${Date.now()}`,
-  });
-  const { timeoutPerTrackMs, debug, createAlbumFolder } = payload || {};
-
-  sendRenderStatus(event.sender, { phase: 'planning' });
-  const plan = await buildRenderPlan(payload);
-  await ensureBinaryIntegrityContract({ strictPackaged: app.isPackaged });
-  const engineBinariesSnapshot = getEngineBinariesSnapshot();
-
-  const jobId = plan.jobId;
-  const exportFolder = plan.exportFolder;
-  const selectedExportFolder = resolveExistingDirectoryPath(lastSelectedExportFolder, 'Selected export folder');
-  const appLogDir = getAppLogDir();
-  const jobLedgerDir = getJobLedgerDir(appLogDir);
-  const plannedTmpPaths = plan.tracks.map((t) => t.partialPath);
-  const plannedFinalPaths = plan.tracks.map((t) => t.outputFinalPath);
-  const { ledgerPath } = createJobLedger({
-    ledgerDir: jobLedgerDir,
-    jobId,
-    exportFolder,
-    tmpPaths: plannedTmpPaths,
-    outputFinalPaths: plannedFinalPaths,
-    logPath: sessionLogger?.filePath || null,
-  });
-  sessionLogger?.info?.('job.ledger.created', {
-    jobId,
-    ledgerPath: redactPathForLog(ledgerPath),
-    exportFolder: redactPathForLog(exportFolder),
-    tmpCount: plannedTmpPaths.length,
-    outputCount: plannedFinalPaths.length,
-  });
-  const engineFsm = createEngineFsm({
-    jobId,
-    onTransition: (entry) => sessionLogger?.info?.('engine.state', entry),
-  });
+  currentJob.phase = JOB_PHASES.PLANNING;
+  currentJob.cancelRequested = false;
   currentJob.cancelled = false;
   currentJob.cancelReason = null;
-  currentJob.active = true;
-  currentJob.id = jobId;
-  currentJob.fsm = engineFsm;
-  currentJob.cleanupContext = {
-    cleanedUp: false,
-    cleanupStats: null,
-    cleanupPromise: null,
-    activeProcess: null,
-    getActiveProcess: () => currentJob.cleanupContext?.activeProcess || null,
-    killProcessTree,
-    killWaitTimeoutMs: 1500,
-    currentTrackPartialPath: null,
-    currentTrackTmpPath: null,
-    partialPaths: new Set(),
-    tmpPaths: new Set(),
-    inFinalize: false,
-    finalizingPartials: new Set(),
-    plannedFinalOutputs: new Set(plan.tracks.map((t) => t.outputFinalPath)),
-    completedFinalOutputs: new Set(),
-    stagingPaths: new Set(),
-    stagingClosers: new Set(),
-    outputFolder: exportFolder,
-    baseExportFolder: lastSelectedExportFolder || null,
-    outputFolderExistedBefore: Boolean(plan.outputFolderExistedBefore),
-    outputFolderHadUserContentBefore: Boolean(plan.outputFolderHadUserContentBefore),
-    createAlbumFolder: Boolean(createAlbumFolder),
-    safeRmdirIfEmpty,
-    logger: sessionLogger,
-  };
+  currentJob.id = null;
+  let payloadObj = {};
+  let planningCleanupContext = null;
+  try {
+    await startupRecoveryPromise;
+    payloadObj = (payload && typeof payload === 'object' && !Array.isArray(payload)) ? payload : {};
+    const requestedExportFolder = String(payloadObj.exportFolder || '').trim();
+    const assertPlanningNotCancelled = (stage = 'planning') => {
+      if (normalizeJobPhase(currentJob.phase) !== JOB_PHASES.PLANNING) return;
+      if (!currentJob.cancelRequested) return;
+      throw buildCancelledError(currentJob.cancelReason || REASON_CODES.CANCELLED, stage);
+    };
+    sessionLogger?.info?.('ipc.render_album.received', {
+      hasPayload: Boolean(payload),
+      keys: payloadKeys(payloadObj),
+      trackCount: Array.isArray(payloadObj.tracks) ? payloadObj.tracks.length : 0,
+      jobIdPreview: `pending-${Date.now()}`,
+    });
+    const { timeoutPerTrackMs, debug, createAlbumFolder } = payloadObj || {};
+    const createAlbumFolderEnabled = Boolean(createAlbumFolder);
+
+    if (createAlbumFolderEnabled && requestedExportFolder && lastSelectedExportFolder) {
+      try {
+        const selectedExportFolder = resolveExistingDirectoryPath(lastSelectedExportFolder, 'Selected export folder');
+        const safeRequestedExportFolder = resolveExistingDirectoryPath(requestedExportFolder, 'Export folder');
+        assertPathWithinBase(selectedExportFolder, safeRequestedExportFolder, 'Export folder');
+        const preflight = releaseFolderPreflight.get(safeRequestedExportFolder) || null;
+        planningCleanupContext = createPlanningCleanupContext({
+          outputFolder: safeRequestedExportFolder,
+          createAlbumFolder: true,
+          outputFolderExistedBefore: Boolean(preflight?.outputFolderExistedBefore),
+          outputFolderHadUserContentBefore: Boolean(preflight?.outputFolderHadUserContentBefore),
+        });
+      } catch {}
+    }
+
+    sendRenderStatus(event.sender, { phase: 'planning' });
+    assertPlanningNotCancelled('planning.start');
+    const plan = await buildRenderPlan(payloadObj, { assertNotCancelled: assertPlanningNotCancelled });
+    assertPlanningNotCancelled('planning.post_plan');
+    await ensureBinaryIntegrityContract({ strictPackaged: app.isPackaged });
+    assertPlanningNotCancelled('planning.post_integrity');
+    planningCleanupContext = createPlanningCleanupContext({
+      outputFolder: plan.exportFolder,
+      createAlbumFolder: createAlbumFolderEnabled,
+      outputFolderExistedBefore: plan.outputFolderExistedBefore,
+      outputFolderHadUserContentBefore: plan.outputFolderHadUserContentBefore,
+    });
+    const engineBinariesSnapshot = getEngineBinariesSnapshot();
+
+    const jobId = plan.jobId;
+    const exportFolder = plan.exportFolder;
+    const selectedExportFolder = resolveExistingDirectoryPath(lastSelectedExportFolder, 'Selected export folder');
+    const appLogDir = getAppLogDir();
+    const jobLedgerDir = getJobLedgerDir(appLogDir);
+    const plannedTmpPaths = plan.tracks.map((t) => t.partialPath);
+    const plannedFinalPaths = plan.tracks.map((t) => t.outputFinalPath);
+    assertPlanningNotCancelled('planning.before_job_init');
+    const { ledgerPath } = createJobLedger({
+      ledgerDir: jobLedgerDir,
+      jobId,
+      exportFolder,
+      tmpPaths: plannedTmpPaths,
+      outputFinalPaths: plannedFinalPaths,
+      logPath: sessionLogger?.filePath || null,
+    });
+    sessionLogger?.info?.('job.ledger.created', {
+      jobId,
+      ledgerPath: redactPathForLog(ledgerPath),
+      exportFolder: redactPathForLog(exportFolder),
+      tmpCount: plannedTmpPaths.length,
+      outputCount: plannedFinalPaths.length,
+    });
+    const engineFsm = createEngineFsm({
+      jobId,
+      onTransition: (entry) => sessionLogger?.info?.('engine.state', entry),
+    });
+    currentJob.cancelled = false;
+    currentJob.cancelReason = null;
+    currentJob.cancelRequested = false;
+    currentJob.active = true;
+    currentJob.phase = JOB_PHASES.RENDERING;
+    currentJob.id = jobId;
+    currentJob.fsm = engineFsm;
+    currentJob.cleanupContext = {
+      cleanedUp: false,
+      cleanupStats: null,
+      cleanupPromise: null,
+      activeProcess: null,
+      getActiveProcess: () => currentJob.cleanupContext?.activeProcess || null,
+      killProcessTree,
+      killWaitTimeoutMs: 1500,
+      currentTrackPartialPath: null,
+      currentTrackTmpPath: null,
+      partialPaths: new Set(),
+      tmpPaths: new Set(),
+      inFinalize: false,
+      finalizingPartials: new Set(),
+      plannedFinalOutputs: new Set(plan.tracks.map((t) => t.outputFinalPath)),
+      completedFinalOutputs: new Set(),
+      stagingPaths: new Set(),
+      stagingClosers: new Set(),
+      outputFolder: exportFolder,
+      baseExportFolder: lastSelectedExportFolder || null,
+      outputFolderExistedBefore: Boolean(plan.outputFolderExistedBefore),
+      outputFolderHadUserContentBefore: Boolean(plan.outputFolderHadUserContentBefore),
+      createAlbumFolder: createAlbumFolderEnabled,
+      safeRmdirIfEmpty,
+      logger: sessionLogger,
+    };
 
   const rendered = [];
   const tracks = plan.tracks;
@@ -3201,6 +3463,7 @@ registerIpcHandler('render-album', async (event, payload) => {
     }
 
     transitionEngineState('FINALIZING', { renderedCountSoFar: rendered.length });
+    currentJob.phase = JOB_PHASES.FINALIZING;
     sendRenderStatus(event.sender, { phase: 'finalizing' });
     const finalizingAtMs = Date.now();
     const finalProgressModel = jobProgressModels.has('MEDIA')
@@ -3247,6 +3510,9 @@ registerIpcHandler('render-album', async (event, payload) => {
     currentJob.cleanupContext.inFinalize = true;
     try {
       for (const trackPlan of tracks) {
+        if (currentJob.cancelled) {
+          throw buildCancelledError(currentJob.cancelReason || REASON_CODES.CANCELLED, 'finalizing.rename_outputs');
+        }
         const partialPath = trackPlan.partialPath;
         const outputFinalPath = trackPlan.outputFinalPath;
         const cleanupContext = currentJob.cleanupContext;
@@ -3279,6 +3545,9 @@ registerIpcHandler('render-album', async (event, payload) => {
       exdevFallback: exdevFallbackCount > 0,
       exdevFallbackCount,
     });
+    if (currentJob.cancelled) {
+      throw buildCancelledError(currentJob.cancelReason || REASON_CODES.CANCELLED, 'finalizing.post_rename');
+    }
 
     emitFinalizeStep(jobId, 'finalize.write_report.start');
     const reportStartedAtMs = Date.now();
@@ -3317,6 +3586,9 @@ registerIpcHandler('render-album', async (event, payload) => {
       exdevFallbackCount,
       ...finalizeSummary,
     });
+    if (currentJob.cancelled) {
+      throw buildCancelledError(currentJob.cancelReason || REASON_CODES.CANCELLED, 'finalizing.pre_success');
+    }
     commitTerminalEngineState('DONE', { reason: 'render_success' });
     sessionLogger?.info?.('render.perf_summary', {
       jobId,
@@ -3359,10 +3631,16 @@ registerIpcHandler('render-album', async (event, payload) => {
       reportPath,
     };
   } catch (err) {
-    const reasonCode = reasonCodeFromError(err);
+    const reasonCode = currentJob.cancelled
+      ? (currentJob.cancelReason || reasonCodeFromError(err))
+      : reasonCodeFromError(err);
     const jobStatus = reasonCode === REASON_CODES.CANCELLED
       ? 'CANCELLED'
-      : (reasonCode === REASON_CODES.TIMEOUT ? 'TIMEOUT' : 'FAILED');
+      : (
+        reasonCode === REASON_CODES.TIMEOUT || reasonCode === REASON_CODES.WATCHDOG_TIMEOUT
+          ? 'TIMEOUT'
+          : 'FAILED'
+      );
     report.job.status = jobStatus;
     report.job.reasonCode = reasonCode;
     report.job.humanMessage = humanMessageForReason(reasonCode, err);
@@ -3421,14 +3699,56 @@ registerIpcHandler('render-album', async (event, payload) => {
   } finally {
     if (debugLogger) debugLogger.close();
     currentJob.active = false;
+    currentJob.phase = JOB_PHASES.IDLE;
     currentJob.ffmpeg = null;
+    currentJob.cancelRequested = false;
     currentJob.cancelled = false;
     currentJob.cancelReason = null;
     currentJob.cleanupContext = null;
     currentJob.id = null;
     currentJob.fsm = null;
   }
+  } catch (err) {
+    const reasonCode = reasonCodeFromError(err);
+    if (normalizeJobPhase(currentJob.phase) === JOB_PHASES.PLANNING) {
+      if (reasonCode === REASON_CODES.CANCELLED && planningCleanupContext) {
+        try {
+          await cleanupJob(currentJob.id || null, REASON_CODES.CANCELLED, planningCleanupContext);
+        } catch (cleanupErr) {
+          sessionLogger?.warn?.('render.planning_cancel_cleanup_failed', {
+            outputFolder: redactPathForLog(planningCleanupContext.outputFolder),
+            message: String(cleanupErr?.message || cleanupErr),
+          });
+        }
+      }
+
+      const humanMessage = humanMessageForReason(reasonCode, err);
+      sessionLogger?.warn?.('render.planning_aborted', {
+        reasonCode,
+        stage: String(err?.stage || 'planning'),
+        message: String(err?.message || err),
+      });
+      return {
+        ok: false,
+        error: {
+          code: reasonCode,
+          message: humanMessage,
+        },
+        reportPath: null,
+        debugLogPath: null,
+        exportFolder: String(payloadObj.exportFolder || '').trim() || null,
+        rendered: [],
+      };
+    }
+    throw err;
   } finally {
+    if (normalizeJobPhase(currentJob.phase) === JOB_PHASES.PLANNING) {
+      currentJob.phase = JOB_PHASES.IDLE;
+      currentJob.cancelRequested = false;
+      currentJob.cancelled = false;
+      currentJob.cancelReason = null;
+      currentJob.id = null;
+    }
     renderAlbumInFlight = false;
   }
 });
