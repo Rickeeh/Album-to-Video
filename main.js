@@ -1308,21 +1308,24 @@ async function probeAudioInfo(audioPath, timeoutMs) {
   if (FFPROBE_BIN && path.isAbsolute(FFPROBE_BIN)) {
     const data = await runFfprobeJson([
       '-v', 'error',
-      '-show_entries', 'stream=codec_type,duration',
+      '-show_entries', 'stream=codec_type,codec_name,duration',
       '-show_entries', 'format=duration',
       '-of', 'json',
       audioPath,
     ], safeTimeoutMs);
 
     const streams = Array.isArray(data?.streams) ? data.streams : [];
-    const hasAudio = streams.some((s) => s.codec_type === 'audio');
-    const streamDur = streams.find((s) => s.codec_type === 'audio')?.duration;
+    const audioStream = streams.find((s) => s.codec_type === 'audio') || null;
+    const hasAudio = Boolean(audioStream);
+    const streamDur = audioStream?.duration;
+    const codecNameRaw = String(audioStream?.codec_name || '').trim().toLowerCase();
+    const codecName = codecNameRaw || null;
     const formatDur = data?.format?.duration;
     const durationSec = parseFloat(String(streamDur || formatDur || '0'));
     const safeDuration = Number.isFinite(durationSec) && durationSec > 0 ? durationSec : 0;
 
     if (hasAudio && safeDuration > 0) {
-      return { ok: true, durationSec: safeDuration, probeMethod };
+      return { ok: true, durationSec: safeDuration, probeMethod, codecName };
     }
     errorTail = 'ffprobe returned no audio stream or invalid duration';
   } else {
@@ -1339,6 +1342,7 @@ async function probeAudioInfo(audioPath, timeoutMs) {
       ok: true,
       durationSec: safeDuration,
       probeMethod: fallbackMethod,
+      codecName: null,
     };
   }
 
@@ -1352,8 +1356,24 @@ async function probeAudioInfo(audioPath, timeoutMs) {
     ok: false,
     durationSec: 0,
     probeMethod: fallbackMethod,
+    codecName: null,
     stderrTail,
   };
+}
+
+const MP4_COPY_COMPATIBLE_AUDIO_CODECS = new Set([
+  'aac',
+  'alac',
+  'ac3',
+  'eac3',
+  'mp3',
+  'mp2',
+]);
+
+function isMp4CopyCompatible(codecName) {
+  const codec = String(codecName || '').trim().toLowerCase();
+  if (!codec) return false;
+  return MP4_COPY_COMPATIBLE_AUDIO_CODECS.has(codec);
 }
 
 function uniqueOutputPath(dir, baseName, ext) {
@@ -1576,11 +1596,15 @@ async function buildRenderPlan(payload, { assertNotCancelled = null } = {}) {
       e.code = REASON_CODES.PROBE_FAILED;
       throw e;
     }
+    const probeCodecName = String(probe?.codecName || '').trim().toLowerCase() || null;
+    const audioMode = isMp4CopyCompatible(probeCodecName) ? 'copy' : 'aac';
 
     plannedTracks.push({
       audioPath: t.audioPath,
       trackNo: t.trackNo,
       durationSec,
+      probeCodecName,
+      audioMode,
       outputBase,
       outputFinalPath,
       partialPath,
@@ -1588,7 +1612,7 @@ async function buildRenderPlan(payload, { assertNotCancelled = null } = {}) {
         imagePath,
         audioPath: t.audioPath,
         presetKey: resolvedPresetKey,
-        audioMode: 'copy',
+        audioMode,
       }),
     });
   }
@@ -3095,9 +3119,12 @@ registerIpcHandler('render-album', async (event, payload) => {
     const ms = Math.floor(Math.max(0, Number(t?.durationSec || 0)) * 1000);
     return sum + (Number.isFinite(ms) ? ms : 0);
   }, 0);
+  const initialAudioMode = tracks.some((t) => String(t?.audioMode || '').toLowerCase() === 'aac')
+    ? 'aac'
+    : 'copy';
   const initialModelInfo = computeJobExpectedWorkMs({
     plannedJobTotalMs: jobTotalMs,
-    audioMode: 'copy',
+    audioMode: initialAudioMode,
     observedFirstSignalMs: null,
     avgBytesPerSec: null,
   });
@@ -3398,7 +3425,7 @@ registerIpcHandler('render-album', async (event, payload) => {
         durationMs: null,
         exitCode: null,
         stderrTail: '',
-        audioMode: 'copy',
+        audioMode: trackPlan.audioMode === 'copy' ? 'copy' : 'aac',
         fallbackReason: null,
         encodeMs: null,
         ffmpegSpawnMs: null,
@@ -3414,6 +3441,7 @@ registerIpcHandler('render-album', async (event, payload) => {
       let shouldFallback = false;
       let fallbackReason = null;
       let fallbackEncodeMs = 0;
+      const requestedAudioMode = trackPlan.audioMode === 'copy' ? 'copy' : 'aac';
 
       try {
         runResult = await runFfmpegStillImage({
@@ -3433,13 +3461,14 @@ registerIpcHandler('render-album', async (event, payload) => {
           jobDoneMsBeforeTrack: jobDoneMs,
           getHasRealSignal: getJobHasRealSignal,
           markHasRealSignal: markJobHasRealSignal,
-          audioMode: 'copy',
+          audioMode: requestedAudioMode,
           jobId,
           jobStartedAtMs,
         });
       } catch (err) {
         shouldFallback = (
-          err?.code === REASON_CODES.FFMPEG_EXIT_NONZERO
+          requestedAudioMode === 'copy'
+          && err?.code === REASON_CODES.FFMPEG_EXIT_NONZERO
           && isAudioCopyCompatibilityError(err?.stderr || err?.stderrTail)
         );
 
@@ -3480,7 +3509,7 @@ registerIpcHandler('render-album', async (event, payload) => {
         });
       }
 
-      trackReport.audioMode = shouldFallback ? 'aac-fallback' : 'copy';
+      trackReport.audioMode = shouldFallback ? 'aac-fallback' : requestedAudioMode;
       trackReport.fallbackReason = fallbackReason;
       trackReport.ffmpegArgs = runResult.ffmpegArgs;
       trackReport.startTs = runResult.startTs;
