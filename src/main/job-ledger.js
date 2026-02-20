@@ -47,7 +47,19 @@ function writeJsonAtomic(filePath, payload) {
   ensureDir(dir);
   const tempPath = `${filePath}.tmp-${process.pid}-${Date.now()}`;
   fs.writeFileSync(tempPath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
-  fs.renameSync(tempPath, filePath);
+  try {
+    fs.renameSync(tempPath, filePath);
+  } catch (err) {
+    if (err?.code !== 'EXDEV') {
+      safeUnlink(tempPath);
+      throw err;
+    }
+    try {
+      fs.copyFileSync(tempPath, filePath);
+    } finally {
+      safeUnlink(tempPath);
+    }
+  }
 }
 
 function readJsonFile(filePath) {
@@ -217,7 +229,9 @@ function recoverInProgressLedgers({
   maxLedgers = 100,
 }) {
   const redact = typeof redactPath === 'function' ? redactPath : (v) => v;
-  const files = listLedgerFiles(ledgerDir).slice(0, Math.max(1, Number(maxLedgers) || 100));
+  const files = listLedgerFiles(ledgerDir);
+  const maxInProgress = Math.max(1, Number(maxLedgers) || 100);
+  let inProgressProcessed = 0;
 
   const summary = {
     scannedLedgers: files.length,
@@ -255,7 +269,18 @@ function recoverInProgressLedgers({
     }
 
     const state = String(ledger?.state || '');
-    if (state !== JOB_LEDGER_STATE_IN_PROGRESS) continue;
+    if (state !== JOB_LEDGER_STATE_IN_PROGRESS) {
+      logger?.warn?.('stale_terminal_ledger_detected', {
+        ledgerPath: redact(ledgerPath),
+        jobId: ledger?.jobId || null,
+        state,
+        schemaVersion: JOB_LEDGER_SCHEMA_VERSION,
+      });
+      safeUnlink(ledgerPath);
+      continue;
+    }
+    if (inProgressProcessed >= maxInProgress) continue;
+    inProgressProcessed += 1;
     const exportFolder = String(ledger?.exportFolder || '');
     if (!isAbsolutePath(exportFolder)) {
       summary.invalidLedgers += 1;

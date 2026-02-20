@@ -18,7 +18,11 @@ function rotateLogs(logDir, keepLatest) {
         }
       })
       .filter(Boolean)
-      .sort((a, b) => b.mtimeMs - a.mtimeMs);
+      .sort((a, b) => {
+        const delta = b.mtimeMs - a.mtimeMs;
+        if (delta !== 0) return delta;
+        return String(b.name).localeCompare(String(a.name));
+      });
   } catch {
     return;
   }
@@ -81,4 +85,4 @@ function createSessionLogger(app, opts = {}) {
   };
 }
 
-module.exports = { createSessionLogger };
+module.exports = { createSessionLogger, rotateLogs };
