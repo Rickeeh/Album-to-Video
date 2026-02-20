@@ -15,6 +15,8 @@ function ensureDir(dirPath) {
 function redactSensitivePathSegments(input) {
   if (typeof input !== 'string') return input;
   let out = input;
+  // UNC shares where user home-style folders are nested (\\SERVER\share\Users\name\...).
+  out = out.replace(/(\\\\[^\\\/]+\\[^\\\/]+\\Users\\)[^\\\/]+/gi, '$1{USER}');
   // Windows user profiles with slash/backslash and case variations.
   out = out.replace(/([A-Za-z]:[\\/]+Users[\\/]+)[^\\/]+/gi, '$1{USER}');
   // Bare \Users\<name>\... variants.

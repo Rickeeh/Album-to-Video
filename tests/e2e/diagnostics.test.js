@@ -42,6 +42,7 @@ function assertOk(condition, message) {
       msg: `event.${i}`,
       filePath: '/Users/alice/private/path/file.mp4',
       winPath: 'C:\\Users\\Alice\\private\\path\\file.mp4',
+      uncPath: '\\\\SERVER\\share\\Users\\Alice\\private\\path\\file.mp4',
       macVolumePath: '/Volumes/AliceDrive/private/path/file.mp4',
     }));
   }
@@ -166,8 +167,10 @@ function assertOk(condition, message) {
   const serialized = JSON.stringify(diagnostics);
   assertOk(!serialized.includes('/Users/alice/'), 'Diagnostics test: expected /Users path redaction.');
   assertOk(!serialized.includes('C:\\\\Users\\\\Alice\\\\'), 'Diagnostics test: expected C:\\Users redaction.');
+  assertOk(!serialized.includes('\\\\\\\\SERVER\\\\share\\\\Users\\\\Alice\\\\'), 'Diagnostics test: expected UNC path redaction.');
   assertOk(serialized.includes('/Users/{USER}/'), 'Diagnostics test: expected redacted /Users/{USER}/ marker.');
   assertOk(serialized.includes('C:\\\\Users\\\\{USER}\\\\'), 'Diagnostics test: expected redacted C:\\Users\\{USER}\\ marker.');
+  assertOk(serialized.includes('\\\\\\\\SERVER\\\\share\\\\Users\\\\{USER}\\\\'), 'Diagnostics test: expected redacted UNC \\SERVER\\share\\Users\\{USER}\\ marker.');
   assertOk(serialized.includes('/Volumes/{VOLUME}/'), 'Diagnostics test: expected redacted /Volumes/{VOLUME}/ marker.');
 
   // Limit behavior for render report payload size.

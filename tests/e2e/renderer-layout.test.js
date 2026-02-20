@@ -4,6 +4,15 @@ const { spawnSync } = require('child_process');
 
 const projectRoot = path.join(__dirname, '..', '..');
 const isRunner = process.argv.includes('--runner');
+const forcedHeadlessSkip = process.env.RENDERER_LAYOUT_FORCE_HEADLESS_SKIP === '1';
+
+function shouldSkipGuiLayoutTest() {
+  if (forcedHeadlessSkip) return true;
+  if (process.platform !== 'linux') return false;
+  const hasDisplay = Boolean(String(process.env.DISPLAY || '').trim());
+  const hasWayland = Boolean(String(process.env.WAYLAND_DISPLAY || '').trim());
+  return !hasDisplay && !hasWayland;
+}
 
 function fail(message) {
   console.error(message);
@@ -112,6 +121,10 @@ async function createWinStyleWindow(BrowserWindow) {
 }
 
 if (!isRunner) {
+  if (shouldSkipGuiLayoutTest()) {
+    console.log('SKIP: requires GUI');
+    process.exit(0);
+  }
   const electronBinary = require('electron');
   const env = { ...process.env };
   delete env.ELECTRON_RUN_AS_NODE;
@@ -129,6 +142,10 @@ if (!isRunner) {
 }
 
 (async () => {
+  if (shouldSkipGuiLayoutTest()) {
+    console.log('SKIP: requires GUI');
+    return;
+  }
   const { app, BrowserWindow } = require('electron');
   process.chdir(projectRoot);
   require(path.join(projectRoot, 'main.js'));

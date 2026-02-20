@@ -87,6 +87,11 @@ function main() {
     'FAIL package.json: dist:win must run verify:packaged-bins after build'
   );
   record(
+    distWinScript.includes('verify:win-artifacts'),
+    'PASS package.json: dist:win verifies updater metadata + artifact uniqueness',
+    'FAIL package.json: dist:win must run verify:win-artifacts after build'
+  );
+  record(
     distMacArm64Script.includes('verify:packaged-bins'),
     'PASS package.json: dist:mac:arm64 verifies packaged binary contract',
     'FAIL package.json: dist:mac:arm64 must run verify:packaged-bins after build'
@@ -166,6 +171,59 @@ function main() {
     );
   });
 
+  record(
+    has(/function\s+safeSendToRenderer\s*\(/, mainSource)
+      && has(/safeSendToRenderer\(sender,\s*'render-status',\s*payload\)/, mainSource)
+      && has(/safeSendToRenderer\(sender,\s*'render-progress',\s*payload\)/, mainSource),
+    'PASS main: renderer IPC sends guard destroyed sender state',
+    'FAIL main: render-status/render-progress sends must guard sender destroyed state'
+  );
+  record(
+    has(/setWindowOpenHandler\s*\(/, mainSource)
+      && has(/security\.window_open_blocked/, mainSource)
+      && has(/on\('will-navigate'/, mainSource)
+      && has(/security\.navigation_blocked/, mainSource),
+    'PASS main: window.open and navigation are hard-blocked',
+    'FAIL main: missing window.open/will-navigate hard-block guards'
+  );
+  record(
+    has(/function\s+assertOutputPathNotExists\s*\(/, mainSource)
+      && has(/assertOutputPathNotExists\(outputFinalPath\)/, mainSource),
+    'PASS main: output finalize path has explicit no-overwrite guard',
+    'FAIL main: finalize move must assert output path does not already exist'
+  );
+  record(
+    has(/finalizing\.rename_outputs/, mainSource)
+      && has(/finalizing\.post_rename/, mainSource)
+      && has(/finalizing\.pre_success/, mainSource),
+    'PASS main: finalizing stage contains cancellation checkpoints',
+    'FAIL main: finalizing stage is missing cancellation checkpoints'
+  );
+  record(
+    has(/phase\s*===\s*JOB_PHASES\.FINALIZING/, mainSource)
+      && has(/deferredCleanup:\s*true/, mainSource)
+      && has(/waitForCurrentJobToSettle/, mainSource),
+    'PASS main: FINALIZING cancellation defers cleanup and waits for settle',
+    'FAIL main: FINALIZING cancellation must defer cleanup and wait for job settle'
+  );
+  record(
+    has(/WATCHDOG_TIMEOUT/, mainSource)
+      && has(/render\.watchdog\.timeout/, mainSource),
+    'PASS main: no-progress watchdog timeout guard is present',
+    'FAIL main: expected WATCHDOG_TIMEOUT reason code and render.watchdog.timeout log guard'
+  );
+  record(
+    has(/preset\.engine\.video\.invalid/, mainSource)
+      && has(/preset\.engine\.video must be a function/, mainSource),
+    'PASS main: preset.engine.video guard rejects invalid preset shape',
+    'FAIL main: expected strict preset.engine.video function guard with structured logging'
+  );
+  record(
+    has(/normalize\('NFC'\)/, mainSource),
+    'PASS main: output base names are NFC-normalized',
+    "FAIL main: sanitizeFileBaseName should normalize unicode to NFC"
+  );
+
   // E2) binary integrity runtime guardrails must exist
   record(
     has(/ensureBinaryIntegrityContract\s*\(\s*\{\s*strictPackaged:\s*app\.isPackaged\s*\}\s*\)/, mainSource),
@@ -240,7 +298,10 @@ function main() {
     },
     {
       name: 'render-album',
-      expected: [/buildRenderPlan\s*\(\s*payload\s*\)/],
+      expected: [
+        /currentJob\.phase\s*=\s*JOB_PHASES\.PLANNING/,
+        /buildRenderPlan\s*\(\s*payloadObj\s*,\s*\{\s*assertNotCancelled:\s*assertPlanningNotCancelled\s*\}\s*\)/,
+      ],
     },
   ];
 
