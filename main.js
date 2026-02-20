@@ -4,7 +4,7 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const crypto = require('crypto');
-const { spawn } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const { cleanupJob } = require('./src/main/cleanup');
 const { createSessionLogger } = require('./src/main/logger');
 const {
@@ -50,6 +50,102 @@ let startupRecoveryPromise = Promise.resolve();
 // Branding strategy A (safe): keep on-disk app log paths unchanged.
 const LEGACY_LOGS_ROOT_NAME = 'Album to Video';
 const LEGACY_LOG_SUBDIR_NAME = 'Album-to-Video';
+const PUBLIC_APP_VERSION = '1.0.0';
+
+function firstEnvValue(keys = []) {
+  for (const key of keys) {
+    const value = String(process.env[key] || '').trim();
+    if (value) return value;
+  }
+  return '';
+}
+
+function normalizeCommitSha(raw) {
+  const value = String(raw || '').trim();
+  if (!value) return null;
+  const match = value.match(/[0-9a-fA-F]{7,40}/);
+  if (!match) return null;
+  return String(match[0]).toLowerCase().slice(0, 12);
+}
+
+function normalizeRefName(raw) {
+  const value = String(raw || '').trim();
+  if (!value || value === 'HEAD') return null;
+  return value;
+}
+
+function readGitOutput(args) {
+  try {
+    const res = spawnSync('git', args, {
+      cwd: __dirname,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 500,
+    });
+    if (res.status !== 0) return '';
+    return String(res.stdout || '').trim();
+  } catch {
+    return '';
+  }
+}
+
+function resolveBuildIdentity() {
+  const githubRef = firstEnvValue(['GITHUB_REF']);
+  const githubRefName = firstEnvValue(['GITHUB_REF_NAME']);
+  const githubRefType = firstEnvValue(['GITHUB_REF_TYPE']).toLowerCase();
+
+  const commitSha = normalizeCommitSha(
+    firstEnvValue([
+      'FRENDER_BUILD_COMMIT_SHA',
+      'BUILD_COMMIT_SHA',
+      'GITHUB_SHA',
+      'CI_COMMIT_SHA',
+      'VERCEL_GIT_COMMIT_SHA',
+      'BITBUCKET_COMMIT',
+    ])
+  ) || normalizeCommitSha(readGitOutput(['rev-parse', '--short=12', 'HEAD']));
+
+  let branch = normalizeRefName(
+    firstEnvValue([
+      'FRENDER_BUILD_BRANCH',
+      'BUILD_BRANCH',
+      'CI_COMMIT_BRANCH',
+      'CI_COMMIT_REF_NAME',
+      'BRANCH_NAME',
+    ])
+  );
+  if (!branch && githubRefType === 'branch') branch = normalizeRefName(githubRefName);
+  if (!branch && /^refs\/heads\//i.test(githubRef)) {
+    branch = normalizeRefName(githubRef.replace(/^refs\/heads\//i, ''));
+  }
+  if (!branch) {
+    const gitBranch = normalizeRefName(readGitOutput(['rev-parse', '--abbrev-ref', 'HEAD']));
+    if (gitBranch && gitBranch !== 'HEAD') branch = gitBranch;
+  }
+
+  let tag = normalizeRefName(
+    firstEnvValue([
+      'FRENDER_BUILD_TAG',
+      'BUILD_TAG',
+      'CI_COMMIT_TAG',
+    ])
+  );
+  if (!tag && githubRefType === 'tag') tag = normalizeRefName(githubRefName);
+  if (!tag && /^refs\/tags\//i.test(githubRef)) {
+    tag = normalizeRefName(githubRef.replace(/^refs\/tags\//i, ''));
+  }
+  if (!tag) {
+    tag = normalizeRefName(readGitOutput(['describe', '--tags', '--exact-match']));
+  }
+
+  return {
+    commitSha: commitSha || 'unknown',
+    branch: branch || null,
+    tag: tag || null,
+  };
+}
+
+const BUILD_IDENTITY = Object.freeze(resolveBuildIdentity());
 
 if (process.platform === 'win32') {
   try {
@@ -1964,7 +2060,10 @@ app.whenReady().then(() => {
         keepLatest: 20,
       });
       sessionLogger.info('app.ready', {
-        appVersion: app.getVersion(),
+        appVersion: PUBLIC_APP_VERSION,
+        commitSha: BUILD_IDENTITY.commitSha,
+        branch: BUILD_IDENTITY.branch,
+        tag: BUILD_IDENTITY.tag,
         electronVersion: process.versions.electron,
         platform: process.platform,
         arch: process.arch,
@@ -2256,7 +2355,10 @@ registerIpcHandler('export-diagnostics', async (_event, payload) => {
   const sessionLogPath = sessionLogger?.filePath || findLatestSessionLogPath(appLogDir);
   await ensureBinaryIntegrityContract({ strictPackaged: app.isPackaged });
   const appInfo = {
-    appVersion: app.getVersion(),
+    appVersion: PUBLIC_APP_VERSION,
+    commitSha: BUILD_IDENTITY.commitSha,
+    branch: BUILD_IDENTITY.branch,
+    tag: BUILD_IDENTITY.tag,
     electronVersion: process.versions.electron,
     platform: process.platform,
     arch: process.arch,
@@ -3035,7 +3137,7 @@ registerIpcHandler('render-album', async (event, payload) => {
   const report = {
     schemaFamily: RENDER_REPORT_SCHEMA_FAMILY,
     schemaVersion: RENDER_REPORT_SCHEMA_VERSION,
-    appVersion: app.getVersion(),
+    appVersion: PUBLIC_APP_VERSION,
     electronVersion: process.versions.electron,
     os: buildOsDescriptor(),
     arch: process.arch,

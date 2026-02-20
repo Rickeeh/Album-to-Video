@@ -48,6 +48,7 @@
   "build": {
     "appId": "com.cudellmediasystems.frender",
     "productName": "fRender",
+    "buildVersion": "1.0.0",
     "asar": true,
     "afterPack": "scripts/electron-builder-after-pack.js",
     "directories": {

@@ -24,6 +24,15 @@ function assertOk(condition, message) {
     mainSource.includes("registerIpcHandler('export-diagnostics'"),
     'Diagnostics test: export-diagnostics IPC handler is not registered in main.js.'
   );
+  assertOk(
+    mainSource.includes('commitSha: BUILD_IDENTITY.commitSha'),
+    'Diagnostics test: export-diagnostics appInfo must include commitSha build identity.'
+  );
+  assertOk(
+    mainSource.includes('branch: BUILD_IDENTITY.branch')
+      && mainSource.includes('tag: BUILD_IDENTITY.tag'),
+    'Diagnostics test: export-diagnostics appInfo must include branch/tag build identity.'
+  );
 
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'album-to-video-diag-e2e-'));
   const destinationDir = path.join(root, 'Release', 'Logs');
@@ -58,6 +67,9 @@ function assertOk(condition, message) {
     destinationDir,
     appInfo: {
       appVersion: '1.0.0',
+      commitSha: 'a7df9a8',
+      branch: 'freeze/v1.0.0',
+      tag: 'v1.0.0-rc.1',
       platform: process.platform,
       arch: process.arch,
       execPath: '/Users/alice/Applications/fRender.app',
@@ -110,6 +122,9 @@ function assertOk(condition, message) {
     destinationDir: appLogsDestinationDir,
     appInfo: {
       appVersion: '1.0.0',
+      commitSha: 'a7df9a8',
+      branch: 'freeze/v1.0.0',
+      tag: 'v1.0.0-rc.1',
       platform: process.platform,
       arch: process.arch,
       execPath: '/Users/alice/Applications/fRender.app',
@@ -139,6 +154,12 @@ function assertOk(condition, message) {
     'Diagnostics test: diagnostics schemaFamily/schemaVersion missing or invalid.'
   );
   assertOk(Boolean(diagnostics.app), 'Diagnostics test: missing app key.');
+  assertOk(diagnostics.app.appVersion === '1.0.0', 'Diagnostics test: expected app.appVersion=1.0.0.');
+  assertOk(diagnostics.app.commitSha === 'a7df9a8', 'Diagnostics test: expected app.commitSha in diagnostics.');
+  assertOk(diagnostics.app.branch === 'freeze/v1.0.0', 'Diagnostics test: expected app.branch in diagnostics.');
+  assertOk(diagnostics.app.tag === 'v1.0.0-rc.1', 'Diagnostics test: expected app.tag in diagnostics.');
+  assertOk(Boolean(diagnostics.app.platform), 'Diagnostics test: expected app.platform in diagnostics.');
+  assertOk(Boolean(diagnostics.app.arch), 'Diagnostics test: expected app.arch in diagnostics.');
   assertOk(Boolean(diagnostics.engine), 'Diagnostics test: missing engine key.');
   assertOk(Boolean(diagnostics.logs), 'Diagnostics test: missing logs key.');
   assertOk(Boolean(diagnostics.observability), 'Diagnostics test: missing observability key.');

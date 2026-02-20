@@ -154,6 +154,18 @@ function main() {
     'PASS job-ledger: schema versioning + fail-safe schema logs are present',
     'FAIL job-ledger: missing schema versioning fail-safe guards'
   );
+  record(
+    has(/const\s+PUBLIC_APP_VERSION\s*=\s*'1\.0\.0'/, mainSource),
+    'PASS main: PUBLIC_APP_VERSION is pinned to 1.0.0 for clean user-visible versioning',
+    'FAIL main: expected PUBLIC_APP_VERSION to be pinned to 1.0.0'
+  );
+  record(
+    has(/commitSha:\s*BUILD_IDENTITY\.commitSha/, mainSource)
+      && has(/branch:\s*BUILD_IDENTITY\.branch/, mainSource)
+      && has(/tag:\s*BUILD_IDENTITY\.tag/, mainSource),
+    'PASS main: diagnostics/build logs include commit/branch/tag identity fields',
+    'FAIL main: expected build identity fields (commitSha/branch/tag) in diagnostics/log payloads'
+  );
 
   // E) path hardening helpers must exist
   const helperChecks = [
