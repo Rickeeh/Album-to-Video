@@ -908,6 +908,7 @@ input {
   let lastProgressSignal = 'none';
   let disposeProgress = null;
   let disposeStatus = null;
+  const PROGRESS_CAP_FINISHING = 0.995;
 
   const uiDisableList = [
     btnAddTracks,
@@ -1699,7 +1700,7 @@ input {
     }
     let target = hasValidRaw ? raw : progressTarget;
     if (!Number.isFinite(target)) target = progressTarget;
-    target = Math.min(target, 0.99);
+    target = Math.min(target, PROGRESS_CAP_FINISHING);
     progressTarget = Math.max(progressTarget, target, progressDisplay);
     if (phase === 'PREPARING') setStatus('Starting...');
     startProgressRaf();
@@ -1726,7 +1727,7 @@ input {
         applyDeterminateProgress(0);
       } else if (normalized === 'finalizing') {
         setStatus('Finalizing...');
-        progressTarget = Math.max(progressTarget, 0.99, progressDisplay);
+        progressTarget = Math.max(progressTarget, PROGRESS_CAP_FINISHING, progressDisplay);
         startProgressRaf();
       } else if (normalized === 'success') {
         completeProgressNow();
