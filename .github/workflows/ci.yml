@@ -105,6 +105,13 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Align build metadata version from tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          node -e "const fs=require('fs'); const p='package.json'; const pkg=JSON.parse(fs.readFileSync(p,'utf8')); const ref=process.env.GITHUB_REF_NAME||''; const v=ref.startsWith('v')?ref.slice(1):ref; if (!/^[0-9]+\.[0-9]+\.[0-9]+([-.].+)?$/.test(v)) { throw new Error('Invalid tag version: '+ref); } pkg.version=v; if (pkg.build && typeof pkg.build === 'object') pkg.build.buildVersion=v; fs.writeFileSync(p, JSON.stringify(pkg, null, 2)+'\n');"
+          node -e "const pkg=require('./package.json'); console.log('package.version='+pkg.version); console.log('build.buildVersion='+(pkg.build&&pkg.build.buildVersion));"
+
       - name: Detect signing secrets
         if: runner.os == 'macOS'
         id: signcheck
