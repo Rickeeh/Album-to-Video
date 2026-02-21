@@ -300,8 +300,8 @@ function runRendererExportContractTest() {
     'Renderer export contract: indeterminate progress mode should be removed.'
   );
   assertOk(
-    source.includes('const PROGRESS_CAP_FINISHING = 0.995;')
-      && source.includes('progressTarget = Math.max(progressTarget, PROGRESS_CAP_FINISHING, progressDisplay);'),
+    /const\s+PROGRESS_CAP_FINISHING\s*=\s*0\.995\s*;/.test(source)
+      && /progressTarget\s*=\s*Math\.max\(\s*progressTarget\s*,\s*PROGRESS_CAP_FINISHING\s*,\s*progressDisplay\s*\)\s*;/.test(source),
     'Renderer export contract: finalizing should force target to >= 99% and cap to 99.5%.'
   );
   [
