@@ -835,12 +835,18 @@ input {
 
   // --- Viewport-fit safety -----------------------------------------------
   try {
-    const DESIGN_H = 760;
+    const EXPORT_MIN = 150;
     const MIN_ZOOM = 0.65;
-    const h = window.innerHeight;
-    if (h > 200 && h < DESIGN_H) {
+    const tbH = document.querySelector('.tb')?.offsetHeight || 0;
+    const presetH = document.querySelector('.r-sec')?.offsetHeight || 0;
+    const coverH = document.querySelector('.cover-block')?.offsetHeight || 0;
+    const summaryH = document.querySelector('.r-summary')?.offsetHeight || 0;
+    const mainH = Math.max(0, window.innerHeight - tbH);
+    const fixedH = presetH + coverH + summaryH;
+    const neededH = fixedH + EXPORT_MIN;
+    if (mainH > 0 && neededH > mainH) {
       document.documentElement.style.zoom = String(
-        Math.max(MIN_ZOOM, h / DESIGN_H)
+        Math.max(MIN_ZOOM, mainH / neededH)
       );
     }
   } catch {}

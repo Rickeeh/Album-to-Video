@@ -1,5 +1,5 @@
 // main.js
-const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, screen } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -1948,19 +1948,82 @@ function extractFallbackReason(stderr) {
   return (hit || tailLines(stderr, 1) || 'audio copy compatibility failure').slice(0, 240);
 }
 
+function clampWindowBoundsToPrimaryWorkArea(win) {
+  if (!win || (typeof win.isDestroyed === 'function' && win.isDestroyed())) return false;
+  let workArea = null;
+  try {
+    workArea = screen.getPrimaryDisplay?.()?.workArea || null;
+  } catch {}
+  if (!workArea) return false;
+
+  const x0 = Number(workArea.x) || 0;
+  const y0 = Number(workArea.y) || 0;
+  const w = Math.max(1, Number(workArea.width) || 0);
+  const h = Math.max(1, Number(workArea.height) || 0);
+  const xMax = x0 + w;
+  const yMax = y0 + h;
+
+  const b = win.getBounds();
+  const outside = (
+    b.x < x0 ||
+    b.y < y0 ||
+    (b.x + b.width) > xMax ||
+    (b.y + b.height) > yMax
+  );
+  if (!outside) return false;
+
+  const clampedX = Math.min(Math.max(b.x, x0), Math.max(x0, xMax - b.width));
+  const clampedY = Math.min(Math.max(b.y, y0), Math.max(y0, yMax - b.height));
+  win.setBounds({
+    x: clampedX,
+    y: clampedY,
+    width: b.width,
+    height: b.height,
+  });
+  return true;
+}
+
 function createWindow() {
   perfMark('createWindow.start');
-  const BASE_W = 1100;
-  const BASE_H = 760;
-  const windowHeight = BASE_H;
+  const DESIGN_W = 1100;
+  const DESIGN_H = 760;
+  const EDGE_MARGIN = 40;
+  const SAFE_FALLBACK_W = DESIGN_W + EDGE_MARGIN;
+  const SAFE_FALLBACK_H = DESIGN_H + EDGE_MARGIN;
+
+  let workAreaW = SAFE_FALLBACK_W;
+  let workAreaH = SAFE_FALLBACK_H;
+  try {
+    const d = screen.getPrimaryDisplay?.();
+    const workArea = d?.workAreaSize || d?.size || null;
+    if (workArea && Number.isFinite(Number(workArea.width))) workAreaW = Number(workArea.width);
+    if (workArea && Number.isFinite(Number(workArea.height))) workAreaH = Number(workArea.height);
+  } catch {}
+
+  const maxWidthByWorkArea = Math.max(640, Math.floor(workAreaW - EDGE_MARGIN));
+  const maxHeightByWorkArea = Math.max(480, Math.floor(workAreaH - EDGE_MARGIN));
+  let windowWidth = Math.min(DESIGN_W, maxWidthByWorkArea);
+  let windowHeight = Math.min(DESIGN_H, maxHeightByWorkArea);
+
+  if (maxHeightByWorkArea < DESIGN_H) {
+    const scale = Math.max(0.65, maxHeightByWorkArea / DESIGN_H);
+    windowWidth = Math.min(
+      maxWidthByWorkArea,
+      Math.max(640, Math.round(DESIGN_W * scale))
+    );
+    windowHeight = Math.max(480, Math.round(DESIGN_H * scale));
+  }
+
+  const minWindowWidth = Math.min(DESIGN_W, windowWidth);
+  const minWindowHeight = Math.min(DESIGN_H, windowHeight);
 
   mainWindow = new BrowserWindow({
     title: 'fRender – Album to Video',
-    width: BASE_W,
+    width: windowWidth,
     height: windowHeight,
-    minWidth: BASE_W,
-    minHeight: windowHeight,
-    maxWidth: BASE_W,
+    minWidth: minWindowWidth,
+    minHeight: minWindowHeight,
+    maxWidth: windowWidth,
     maxHeight: windowHeight,
     useContentSize: true,
     resizable: false,
@@ -2021,7 +2084,6 @@ function createWindow() {
     try { mainWindow.removeMenu(); } catch {}
   }
   try {
-    const { screen } = require('electron');
     const d = screen.getPrimaryDisplay?.();
     sessionLogger?.info?.('dpi.main', {
       primary: d ? {
@@ -2036,6 +2098,12 @@ function createWindow() {
 
   perfMark('createWindow.end');
   mainWindow.once('ready-to-show', () => {
+    const clamped = clampWindowBoundsToPrimaryWorkArea(mainWindow);
+    if (clamped) {
+      sessionLogger?.info?.('window.bounds_clamped_to_workarea', {
+        bounds: mainWindow.getBounds(),
+      });
+    }
     perfMark('window.ready-to-show');
     mainWindow.show();
 
@@ -2148,7 +2216,6 @@ app.whenReady().then(() => {
         });
       });
       try {
-        const { screen } = require('electron');
         const d = screen.getPrimaryDisplay?.();
         sessionLogger.info('dpi.main', {
           primary: d ? {
