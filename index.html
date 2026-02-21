@@ -833,6 +833,19 @@ input {
     });
   } catch {}
 
+  // --- Viewport-fit safety -----------------------------------------------
+  try {
+    const DESIGN_H = 760;
+    const MIN_ZOOM = 0.65;
+    const h = window.innerHeight;
+    if (h > 200 && h < DESIGN_H) {
+      document.documentElement.style.zoom = String(
+        Math.max(MIN_ZOOM, h / DESIGN_H)
+      );
+    }
+  } catch {}
+  // -----------------------------------------------------------------------
+
   const tracksBody = document.getElementById('tracks-body');
   const tracksEmpty = document.getElementById('tracks-empty');
   const trackList = document.getElementById('track-list');
