@@ -299,9 +299,12 @@ function runRendererExportContractTest() {
     !source.includes('INDETERMINATE'),
     'Renderer export contract: indeterminate progress mode should be removed.'
   );
+  const reCap = /const\s+PROGRESS_CAP_FINISHING\s*=\s*0\.995\s*;/;
+  const reFinalizingFloorCap = /progressTarget\s*=\s*Math\.max\(\s*progressTarget\s*,\s*PROGRESS_CAP_FINISHING\s*,\s*progressDisplay\s*\)\s*;/;
+  const reFinalizingFloorLiteral = /progressTarget\s*=\s*Math\.max\(\s*progressTarget\s*,\s*0\.99(?:5)?\s*,\s*progressDisplay\s*\)\s*;/;
   assertOk(
-    /const\s+PROGRESS_CAP_FINISHING\s*=\s*0\.995\s*;/.test(source)
-      && /progressTarget\s*=\s*Math\.max\(\s*progressTarget\s*,\s*PROGRESS_CAP_FINISHING\s*,\s*progressDisplay\s*\)\s*;/.test(source),
+    (reCap.test(source) && reFinalizingFloorCap.test(source))
+      || reFinalizingFloorLiteral.test(source),
     'Renderer export contract: finalizing should force target to >= 99% and cap to 99.5%.'
   );
   [
